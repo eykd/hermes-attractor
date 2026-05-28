@@ -1,0 +1,189 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hermes-attractor"
+dynamic = ["version"]
+description = "A Hermes Agent plugin (attractor)"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+authors = [
+    {name = "David Eyk", email = "david@worldsenoughstudios.com"},
+]
+dependencies = []
+
+[project.entry-points."hermes.plugins"]
+attractor = "hermes_attractor.plugin:register"
+
+[project.urls]
+Repository = "https://github.com/eykd/hermes-attractor"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/hermes_attractor/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hermes_attractor"]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.0.1",
+    "ruff>=0.9.1",
+    "pyright>=1.1.390",
+]
+test = [
+    "pytest>=8.3.4",
+    "pytest-cov>=6.0.0",
+    "pytest-xdist>=3.6.1",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [
+    "src/hermes_attractor/_version.py",
+    ".claude/",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+    "ARG",    # flake8-unused-arguments
+    "SIM",    # flake8-simplify
+    "TC",     # flake8-type-checking
+    "PTH",    # flake8-use-pathlib
+    "ERA",    # eradicate
+    "PL",     # pylint
+    "RUF",    # ruff-specific rules
+    "N",      # pep8-naming
+    "D",      # pydocstyle
+    "ANN",    # flake8-annotations
+    "S",      # flake8-bandit
+    "BLE",    # flake8-blind-except
+    "FBT",    # flake8-boolean-trap
+    "A",      # flake8-builtins
+    "COM",    # flake8-commas
+    "C90",    # mccabe
+    "EM",     # flake8-errmsg
+    "EXE",    # flake8-executable
+    "ISC",    # flake8-implicit-str-concat
+    "ICN",    # flake8-import-conventions
+    "G",      # flake8-logging-format
+    "INP",    # flake8-no-pep420
+    "PIE",    # flake8-pie
+    "T20",    # flake8-print
+    "PYI",    # flake8-pyi
+    "PT",     # flake8-pytest-style
+    "Q",      # flake8-quotes
+    "RSE",    # flake8-raise
+    "RET",    # flake8-return
+    "SLF",    # flake8-self
+    "SLOT",   # flake8-slots
+    "TID",    # flake8-tidy-imports
+    "INT",    # flake8-gettext
+    "TD",     # flake8-todos
+    "FIX",    # flake8-fixme
+    "PGH",    # pygrep-hooks
+    "FLY",    # flynt
+    "PERF",   # perflint
+    "LOG",    # flake8-logging
+    "TRY",    # tryceratops
+]
+ignore = [
+    "D203",    # 1 blank line required before class docstring (conflicts with D211)
+    "D213",    # Multi-line docstring summary should start at the second line (conflicts with D212)
+    "COM812",  # Missing trailing comma (conflicts with formatter)
+    "ISC001",  # Implicit string concatenation (conflicts with formatter)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",    # Allow assert in tests
+    "ARG",     # Allow unused arguments in tests (fixtures)
+    "FBT",     # Allow boolean positional arguments in tests
+    "PLR2004", # Allow magic values in tests
+    "S105",    # Allow hardcoded passwords in tests
+    "S106",    # Allow hardcoded passwords in tests
+    "S603",    # Allow subprocess calls in tests
+    "S607",    # Allow partial executable paths in tests
+]
+"src/hermes_attractor/_version.py" = [
+    "ALL",     # Auto-generated file, ignore all linting
+]
+"src/hermes_attractor/plugin/tools.py" = [
+    "BLE001",  # Hermes contract: handlers must never raise, so they catch broad Exception
+    "ARG001",  # Hermes contract: handlers share a uniform (args) signature, even when unused
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.pyright]
+pythonVersion = "3.11"
+include = ["src", "tests"]
+exclude = [
+    "src/hermes_attractor/_version.py",
+    "**/__pycache__",
+]
+typeCheckingMode = "strict"
+# Paranoid escalations beyond strict:
+reportUnnecessaryTypeIgnoreComment = "error"
+reportImplicitStringConcatenation = "error"
+reportCallInDefaultInitializer = "error"
+reportPropertyTypeMismatch = "error"
+reportUninitializedInstanceVariable = "error"
+reportImplicitOverride = "error"
+reportMissingSuperCall = "error"
+reportUnusedCallResult = "error"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--cov=hermes_attractor",
+    "--cov-report=term-missing:skip-covered",
+    "--cov-report=html",
+    "--cov-report=xml",
+]
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "contract: Contract tests",
+]
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+parallel = true
+omit = [
+    "src/hermes_attractor/ports/*",  # Protocol definitions don't need direct tests
+    "src/hermes_attractor/_version.py",
+]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+fail_under = 100
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
+
+[tool.coverage.paths]
+source = [
+    "src/hermes_attractor",
+    ".tox/*/lib/python*/site-packages/hermes_attractor",
+]

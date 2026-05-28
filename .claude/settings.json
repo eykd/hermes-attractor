@@ -1,0 +1,101 @@
+{
+  "statusLine": {
+    "type": "command",
+    "command": "cat | python3 $CLAUDE_PROJECT_DIR/.claude/hooks/status_line.py"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat | python3 $CLAUDE_PROJECT_DIR/.claude/hooks/pre_tool_use_bash.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run ruff format --check"
+          },
+          {
+            "type": "command",
+            "command": "uv run ruff check"
+          },
+          {
+            "type": "command",
+            "command": "uv run pyright"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/session_start.py"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/pre_compact.py"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/on_stop.py"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(uv run:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv add:*)",
+      "Bash(uv lock:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(just:*)",
+      "Bash(git add:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(br ready:*)",
+      "Bash(br create:*)",
+      "Bash(br update:*)",
+      "Bash(br close:*)",
+      "Bash(br show:*)",
+      "Bash(br list:*)",
+      "Bash(br dep:*)",
+      "Bash(br sync:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(find:*)",
+      "Bash(cat:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(sed:*)",
+      "Skill(commit)",
+      "Skill(test-driven-development)"
+    ],
+    "deny": []
+  }
+}
