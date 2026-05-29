@@ -22,3 +22,12 @@ MAX_LIVE_CARDS_PER_RUN: int = 256
 
 #: Batch size for reading events from the EventLog (research D6).
 EVENT_LOG_BATCH_SIZE: int = 100
+
+#: Maximum raw DOT input size in bytes for DotSerializer.parse (resource limit).
+DOT_MAX_INPUT_BYTES: int = 1_048_576  # 1 MiB
+
+#: Maximum number of nodes allowed in a parsed pipeline graph (resource limit).
+DOT_MAX_NODES: int = 256
+
+#: Maximum number of edges allowed in a parsed pipeline graph (resource limit).
+DOT_MAX_EDGES: int = 1024
