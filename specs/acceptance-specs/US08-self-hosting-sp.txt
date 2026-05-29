@@ -1,0 +1,14 @@
+;=============================================
+; Self-hosting sp workflow reference pipeline runs end-to-end.
+;=============================================
+GIVEN the self-hosting reference pipeline encoding the sp development workflow as an Attractor graph.
+WHEN the pipeline is validated.
+THEN it validates clean with no issues.
+
+WHEN the pipeline runs end-to-end with simulated card completions for each phase.
+THEN it produces the expected per-phase outputs.
+THEN review lenses route in parallel via fan-out and fan-in.
+THEN the run pauses at human approval gates and resumes when input is supplied.
+THEN goal-gated review loops route back until satisfied and exit when goals are met.
+THEN tool nodes execute their deterministic work.
+THEN the run exits with status SUCCEEDED.

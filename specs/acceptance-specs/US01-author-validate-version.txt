@@ -1,0 +1,28 @@
+;=============================================
+; Author a branched goal-gated pipeline and verify it validates clean and is git-tracked.
+;=============================================
+GIVEN an empty repository.
+WHEN the agent creates a pipeline graph with a branch and a goal gate using the attractor authoring tools.
+THEN the pipeline validates clean with no issues.
+THEN the pipeline is saved as a git-tracked .dot file in the repository.
+
+;=============================================
+; Invalid pipeline rejected naming the offending element (no start node).
+;=============================================
+GIVEN a pipeline definition with no start node.
+WHEN attractor_validate is called.
+THEN the result is valid:false with issues listing an offending element and reason.
+
+;=============================================
+; Invalid pipeline rejected naming the offending element (dangling edge).
+;=============================================
+GIVEN a pipeline definition with an edge referencing a nonexistent target node.
+WHEN attractor_validate is called.
+THEN the result is valid:false with issues naming the dangling edge source and target.
+
+;=============================================
+; Invalid pipeline rejected naming the offending element (unknown profile).
+;=============================================
+GIVEN a pipeline definition with a node assigned a profile that does not exist.
+WHEN attractor_validate is called.
+THEN the result is valid:false with issues naming the node with the unknown profile.

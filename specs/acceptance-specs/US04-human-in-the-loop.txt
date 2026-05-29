@@ -1,0 +1,16 @@
+;=============================================
+; Human-in-the-loop node pauses the run and resumes on human input.
+;=============================================
+GIVEN a pipeline containing a human-in-the-loop node.
+WHEN traversal reaches the human-in-the-loop node.
+THEN the run pauses with status PAUSED_HUMAN.
+THEN the card is blocked awaiting human action.
+
+;=============================================
+; Paused run survives a gateway restart and resumes when human provides input.
+;=============================================
+GIVEN a run paused at a human-in-the-loop node.
+WHEN the Hermes gateway is killed and restarted while the run is paused.
+THEN the run remains durably paused with no state loss.
+WHEN a human supplies input by completing the blocked card.
+THEN the run resumes and continues to completion.

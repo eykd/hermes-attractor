@@ -1,0 +1,7 @@
+;=============================================
+; Per-node profile override takes precedence over stylesheet default.
+;=============================================
+GIVEN a pipeline whose nodes use a stylesheet default profile and one node has a per-node profile override.
+WHEN the pipeline runs.
+THEN each work node creates a kanban card assigned to the resolved profile.
+THEN the node with the per-node override is assigned that override profile, not the stylesheet default.

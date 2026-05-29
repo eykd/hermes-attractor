@@ -1,0 +1,50 @@
+;=============================================
+; Pipeline with no start node is rejected naming the offending element.
+;=============================================
+GIVEN an invalid pipeline with no start node.
+WHEN attractor_validate is called.
+THEN the result is valid:false with issues naming the missing start node.
+THEN the pipeline cannot be run.
+
+;=============================================
+; Pipeline with multiple exit nodes is rejected.
+;=============================================
+GIVEN an invalid pipeline with more than one exit node.
+WHEN attractor_validate is called.
+THEN the result is valid:false with issues naming the duplicate exit nodes.
+
+;=============================================
+; Pipeline with an unreachable node is rejected.
+;=============================================
+GIVEN an invalid pipeline containing a node that cannot be reached from the start node.
+WHEN attractor_validate is called.
+THEN the result is valid:false with issues naming the unreachable node.
+
+;=============================================
+; Pipeline with a dangling edge is rejected naming source and target.
+;=============================================
+GIVEN an invalid pipeline with an edge referencing a target node that does not exist.
+WHEN attractor_validate is called.
+THEN the result is valid:false with issues naming the edge's source and the missing target.
+
+;=============================================
+; Pipeline with a goal gate whose retry target is unreachable is rejected.
+;=============================================
+GIVEN a pipeline with a goal-gated node whose retry_target does not exist or is not reachable.
+WHEN attractor_validate is called.
+THEN the result is valid:false with issues naming the goal-gated node and the unreachable retry target.
+
+;=============================================
+; Pipeline with an unresolvable profile is rejected.
+;=============================================
+GIVEN an invalid pipeline with a node that has no profile and no matching stylesheet rule.
+WHEN attractor_validate is called.
+THEN the result is valid:false with issues naming the node with the unresolvable profile.
+
+;=============================================
+; attractor_run rejects an invalid pipeline.
+;=============================================
+GIVEN an invalid pipeline that fails validation.
+WHEN attractor_run is called.
+THEN ok is false and the response includes the validation issues.
+THEN no run is created.
