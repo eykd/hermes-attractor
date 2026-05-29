@@ -35,9 +35,24 @@ hints (preferred label, suggested next nodes), and context updates.
 
 ## Codergen (node)
 
-A `box`-shaped node whose work is performed by an LLM — in this project, via a **Hermes
-agent session**. The node's resolved model determines that session's model.
+A `box`-shaped node whose work is performed by an agent — in this project, via a **Hermes
+Kanban card** assigned to the node's profile. The kanban dispatcher spawns that profile as a
+worker; the node's outcome is derived from the card's completion result.
 *Avoid*: "LLM node" (use only descriptively), "agent step".
+
+## Profile
+
+A named Hermes agent configuration. A work node names the **profile** that performs it (the
+card's **assignee**), and the profile's configuration determines the model used. "Select a
+model per node" is realized as "select a profile per node".
+*Avoid*: "agent role", "persona", "worker type".
+
+## Card (Kanban Task)
+
+The durable unit of work the plugin creates for a work node on the Hermes Kanban board.
+Carries the assignee (profile), body (expanded prompt), status, retry limit, and result. The
+node's **Outcome** is read from the card's completion summary/metadata.
+*Avoid*: "ticket", "job", "kanban item".
 
 ## Goal Gate
 
@@ -45,16 +60,16 @@ A flag marking a node that must reach success or partial success before the pipe
 exit. An unsatisfied gate routes traversal to a retry target.
 *Avoid*: "exit condition", "checkpoint".
 
-## Model Stylesheet
+## Stylesheet (Profile Stylesheet)
 
-A graph-level set of selector→model rules (universal / shape / class / id) with specificity
-precedence that sets per-node model defaults. Per-node attributes override it.
-*Avoid*: "model config", "model map".
+A graph-level set of selector→profile rules (universal / shape / class / id) with specificity
+precedence that sets per-node profile defaults. A per-node profile assignment overrides it.
+*Avoid*: "model stylesheet", "profile config", "profile map".
 
 ## Run
 
-A single durable execution of a pipeline on the orchestrator, with a status and a
-retrievable outcome.
+A single durable execution of a pipeline, backed by the Hermes Kanban board, with persisted
+state, a status, and a retrievable outcome.
 *Avoid*: "execution", "job", "instance" (informal).
 
 ## Fan-out / Fan-in

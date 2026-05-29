@@ -5,6 +5,16 @@ topic: attractor-hermes-temporal
 
 # Attractor as a Hermes Plugin on Temporal
 
+> **Update (2026-05-28, during /sp:02-specify):** Two decisions below were superseded after
+> learning the Hermes constraints. (1) Plugins **cannot** spawn agent sub-sessions, but the
+> **Hermes Kanban board** can run agent work — so node execution is via kanban cards
+> assigned to profiles, not in-process sessions. (2) The kanban board already provides
+> durable, retrying, dependency-aware, human-in-the-loop execution, making **Temporal
+> redundant** — it has been **dropped**; the plugin is a deterministic traversal engine
+> (reducer over kanban completion events). (3) Per-node *model* selection is expressed as
+> per-node *profile* selection. The authoritative, current requirements live in
+> `specs/001-attractor-kanban/spec.md`. This doc is retained as historical context.
+
 ## Problem Frame
 
 Teams building multi-stage AI/agent pipelines need a way to **declare** a workflow

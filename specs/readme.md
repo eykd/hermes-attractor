@@ -3,14 +3,14 @@
 A keyword-searchable index of feature specs in this repo. Future agents: scan here first to
 find the spec relevant to a task.
 
-## Attractor on Temporal (Hermes Plugin)
+## Attractor on Hermes Kanban (Plugin)
 
 Keywords: attractor, strongdm attractor, pipeline orchestration, DOT, graphviz, digraph,
-workflow graph, Temporal, durable execution, workflow vs activity, per-node model,
-model stylesheet, model selection, goal gate, fan-out, fan-in, parallel branches,
-human-in-the-loop, tool node, codergen, Hermes agent plugin, hermes_agent.plugins,
-agent session, software factory, self-hosting sp workflow
-Spec: specs/001-attractor-temporal/spec.md
+workflow graph, Hermes Kanban, kanban board, durable execution, dispatcher, profile worker,
+per-node profile, per-node model, profile stylesheet, model selection, goal gate, fan-out,
+fan-in, parallel branches, human-in-the-loop, tool node, codergen, deterministic traversal
+engine, Hermes agent plugin, hermes_agent.plugins, software factory, self-hosting sp workflow
+Spec: specs/001-attractor-kanban/spec.md
 Brainstorm: specs/brainstorms/2026-05-28-attractor-hermes-temporal-requirements.md
 
 ## How to Update This File
