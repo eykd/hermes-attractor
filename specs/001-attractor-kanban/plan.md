@@ -423,8 +423,13 @@ Added by red-team Pass 1.
   validation or be forced to chunk its fan-out, undermining SC-006. Resolution: (a) the
   fan-out cap bounds the count of *direct simultaneous children of a single fan-out node*,
   and the engine MUST additionally bound the *total live (non-terminal) card count per run*
-  with a separate constant `MAX_LIVE_CARDS_PER_RUN` so nested fan-outs cannot compound past a
-  whole-run ceiling; (b) the `sp` reference pipeline MUST model unbounded work as *sequential
+  with a separate constant `MAX_LIVE_CARDS_PER_RUN = 256` in `domain/constants.py`, so nested
+  fan-outs cannot compound past a whole-run ceiling. The value 256 equals `MAX_FAN_OUT_WIDTH²`
+  and matches the maximum node count (also 256), making it the tightest value that still permits
+  a fully-populated single-depth fan-out of the largest legal pipeline. Exceeding it at runtime
+  yields a blocked run with a structured reason; at validation time a pipeline whose *static*
+  fan-out topology provably exceeds 256 simultaneous live nodes is a `PipelineValidationError`;
+  (b) the `sp` reference pipeline MUST model unbounded work as *sequential
   iteration over a bounded-width fan-out batch* (process ready-queue items in waves of ≤16),
   NOT as a single mega-fan-out — this is the same acyclic-iteration pattern already mandated
   for goal-gate loops (D4). M6 must demonstrate this batching pattern; if the reference graph
