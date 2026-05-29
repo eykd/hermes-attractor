@@ -467,3 +467,102 @@ def test_fan_in_merge_conflict_recorded_under_merge_conflicts_key() -> None:
     )
     conflicts = cast("dict[str, object]", context_data["_merge_conflicts"])
     assert "result" in conflicts, f"Expected 'result' key in _merge_conflicts, got: {list(conflicts.keys())}"
+
+
+def test_sequential_codergen_context_updates_visible_to_next_node() -> None:
+    """Sequential CODERGEN context_updates are applied before the next node is dispatched.
+
+    GIVEN a sequential pipeline: node_a (CODERGEN) -> node_b (CODERGEN, prompt uses $result)
+    WHEN node_a completes with context_updates={"result": "ok"}
+    THEN the kanban card created for node_b has its prompt expanded with the updated context
+    THEN run.context is persisted with the updated value.
+
+    This validates FR-008 for sequential (non-FAN_IN) paths: context_updates from a
+    completing CODERGEN card must be applied to run.context before the next node's card
+    is created, not silently dropped.
+    """
+    # Build: start -> node_a -> node_b -> exit.
+    start = Node(node_id="start", shape=NodeShape.START)
+    node_a = Node(node_id="node_a", shape=NodeShape.CODERGEN, profile="worker", prompt="First task")
+    node_b = Node(
+        node_id="node_b",
+        shape=NodeShape.CODERGEN,
+        profile="worker",
+        prompt="Second task, result=$result",
+    )
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    pipeline = Pipeline(
+        spec_id="sequential-context-pipeline",
+        nodes=[start, node_a, node_b, exit_],
+        edges=[
+            Edge(source_id="start", target_id="node_a"),
+            Edge(source_id="node_a", target_id="node_b"),
+            Edge(source_id="node_b", target_id="exit"),
+        ],
+        stylesheet=Stylesheet(rules=[StyleRule(selector="*", profile="default")]),
+    )
+
+    run_state, runs, nodes = _make_fake_state()
+
+    run_id = "seq-run-1"
+    run = Run(
+        run_id=run_id,
+        spec_id="sequential-context-pipeline",
+        status=RunStatus.RUNNING,
+        context=Context(data={}),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    runs[run_id] = run
+    # node_a is currently dispatched.
+    nodes.append(
+        RunNode(
+            run_id=run_id,
+            node_id="node_a",
+            task_id="task-a",
+            status=NodeRunStatus.DISPATCHED,
+            attempt=1,
+            parent_node_ids=["start"],
+        )
+    )
+
+    cards_created: list[object] = []
+
+    def _create_card(card: object) -> str:
+        """Record the card and return a task id."""
+        cards_created.append(card)
+        return f"task-{len(cards_created):03d}"
+
+    kanban = MagicMock()
+    kanban.create_card.side_effect = _create_card
+    clock = MagicMock()
+    clock.now.return_value = _LATER
+
+    # node_a completes with context_updates — the "result" key should be visible to node_b.
+    advance_on_completion(
+        card_result=CardResult(
+            task_id="task-a",
+            event_id=1,
+            event_kind="completed",
+            summary="node_a done",
+            metadata={"context_updates": {"result": "ok"}},
+        ),
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    # A card for node_b should have been created.
+    assert len(cards_created) == 1, f"Expected 1 card created for node_b, got {len(cards_created)}"
+    node_b_card = cards_created[0]
+    body = getattr(node_b_card, "body", None)
+    assert body is not None, "Created card has no 'body' attribute"
+    assert "ok" in str(body), f"Expected node_b card prompt to contain the updated result='ok', got: {body!r}"
+    assert "$result" not in str(body), f"Expected $result placeholder to be expanded in node_b prompt, got: {body!r}"
+
+    # run.context should also be persisted with the updated value.
+    final_run = runs[run_id]
+    assert final_run.context.data.get("result") == "ok", (
+        f"Expected run.context to have result='ok' after sequential context_updates, got: {final_run.context.data!r}"
+    )

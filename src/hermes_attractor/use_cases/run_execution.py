@@ -320,8 +320,10 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
     gate_passed = _gate_verdict_pass(card_result.metadata) if is_gate else True
 
     # Extract context_updates from metadata (FR-008).
-    # For non-TOOL nodes, updates are stored on the RunNode for FAN_IN merge;
-    # for sequential paths they are applied to run.context before next dispatch.
+    # Updates are stored on the RunNode for FAN_IN merge (to allow branch-level
+    # conflict detection). For sequential paths, they are also applied to run.context
+    # immediately after upsert so that edge selection, guard evaluation, and prompt
+    # expansion all see the updated context.
     raw_meta_updates = card_result.metadata.get("context_updates")
     node_context_updates: Mapping[str, object] = (
         cast("Mapping[str, object]", raw_meta_updates) if isinstance(raw_meta_updates, dict) else {}
@@ -340,6 +342,21 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
         context_updates=node_context_updates,
     )
     run_state.upsert_node(completed_node)
+
+    # Apply context_updates to run.context for sequential paths (FR-008).
+    # FAN_IN paths re-merge from RunNode.context_updates later; applying here too is
+    # harmless because the FAN_IN branch unconditionally rebuilds run from merged_context.
+    if node_context_updates:
+        run = Run(
+            run_id=run.run_id,
+            spec_id=run.spec_id,
+            status=run.status,
+            context=run.context.apply(node_context_updates),
+            created_at=run.created_at,
+            updated_at=run.updated_at,
+            root_task_id=run.root_task_id,
+            last_seen_event_id=run.last_seen_event_id,
+        )
 
     # FAN_OUT: dispatch all outgoing branches as siblings.
     if pipeline_node is not None and pipeline_node.shape is NodeShape.FAN_OUT:
