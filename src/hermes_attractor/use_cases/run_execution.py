@@ -206,6 +206,18 @@ def advance_on_completion(
     applies context updates, selects the next edge, creates follow-up cards,
     and saves the run with the updated event cursor (cursor-last ordering, FR-024).
 
+    **HUMAN node behaviour (FR-013/FR-017)**:
+    When the selected next node is a HUMAN node, this function creates a HUMAN
+    card, calls ``block_card``, and persists the run as ``PAUSED_HUMAN``. The run
+    then waits durably — **no busy-wait, no polling**. The ``PAUSED_HUMAN`` status
+    is the durable persisted state; the run resumes only when the reconciler
+    processes the human card's terminal completion event.
+
+    **PAUSED_HUMAN resume**:
+    When a HUMAN card's completion event is processed (run is ``PAUSED_HUMAN``),
+    this function transitions the run back to ``RUNNING`` before the cursor-last
+    ``save_run`` call.
+
     Args:
         card_result: The completion event from the kanban board.
         kanban: The KanbanBoard port for creating follow-up cards.
