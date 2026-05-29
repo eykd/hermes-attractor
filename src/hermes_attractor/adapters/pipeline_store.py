@@ -58,13 +58,6 @@ def _validate_spec_id(spec_id: str, repo_root: Path) -> Path:
             issues=[ValidationIssue(element_id="spec_id", reason=msg)],
             message="Invalid spec_id",
         )
-    _win_drive_prefix_len = 2
-    if spec_id.startswith("/") or (len(spec_id) >= _win_drive_prefix_len and spec_id[1] == ":"):
-        msg = f"spec_id {spec_id!r} is an absolute path"  # pragma: no cover
-        raise PipelineValidationError(  # pragma: no cover
-            issues=[ValidationIssue(element_id="spec_id", reason=msg)],  # pragma: no cover
-            message="Invalid spec_id",  # pragma: no cover
-        )  # pragma: no cover
     if not _SAFE_SPEC_ID_RE.match(spec_id):
         msg = f"spec_id {spec_id!r} contains characters outside [A-Za-z0-9_-]"
         raise PipelineValidationError(
