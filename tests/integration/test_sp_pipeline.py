@@ -1,6 +1,7 @@
-"""Unit tests for the sp workflow DOT pipeline (RED phase M6 US8).
+"""Integration tests for the sp workflow DOT pipeline (M6 US8).
 
-Tests fail because specs/pipelines/sp-workflow.dot does not yet exist.
+These tests exercise the real DOT parse path (PydotSerializer adapter + domain together)
+and so live in the integration suite, not the domain unit suite.
 """
 
 from __future__ import annotations
@@ -12,9 +13,9 @@ import pytest
 from hermes_attractor.adapters.dot_serializer import PydotSerializer
 from hermes_attractor.domain.pipeline import NodeShape, Pipeline
 
-pytestmark = pytest.mark.unit
+pytestmark = pytest.mark.integration
 
-_SP_DOT_PATH = Path(__file__).parents[3] / "specs" / "pipelines" / "sp-workflow.dot"
+_SP_DOT_PATH = Path(__file__).parents[2] / "specs" / "pipelines" / "sp-workflow.dot"
 _SERIALIZER = PydotSerializer()
 
 
