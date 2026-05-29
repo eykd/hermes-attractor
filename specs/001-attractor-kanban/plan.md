@@ -203,6 +203,167 @@ under `specs/acceptance-specs/`.
   authoring while a `PipelineValidationError` exists for hard-failure boundaries; adapter
   failures translate to safe JSON payloads; the plugin never raises (FR-023).
 
+## Security Considerations
+
+Added by red-team Pass 1. The plugin's trust boundaries are: (a) DOT pipeline definitions
+(git-tracked, may originate from any repo the agent can reach — treat as untrusted input),
+(b) the run `Context` (seeded by the caller and grown from worker-written card results), and
+(c) the kanban port (card bodies and parsed card results). These mitigations are
+load-bearing and MUST be designed into the relevant ports/use cases, not bolted on.
+
+### Guard / condition evaluation (FR-011) — no arbitrary code execution
+
+- Edge `condition` and conditional-node guards are strings sourced from DOT (untrusted) and
+  evaluated against the `Context` (worker-influenced). They MUST NOT be evaluated with
+  `eval`/`exec`/`compile` or any Python execution path.
+- Define a **restricted, total guard mini-language** evaluated by a pure domain evaluator:
+  comparison + boolean ops over context keys and literals only (no attribute access, no
+  calls, no indexing into arbitrary objects, no imports). Unknown/undefined keys evaluate to
+  a defined falsy result, never an exception that escapes the domain.
+- The guard evaluator is a pure, total domain function (replay-safe like `EdgeSelector`); an
+  unparseable guard is a **validation error** (FR-004), not a runtime surprise.
+
+### Prompt / `$var` expansion (FR-022) — template, not interpolation
+
+- Context values expanded into card bodies (which become downstream agent prompts) are an
+  injection surface (a malicious or compromised upstream node can write context that steers
+  a downstream worker). Expansion MUST be a literal, non-recursive substitution of known
+  `$var` placeholders only — never a templating engine that evaluates expressions, and never
+  re-expanded on the substituted result.
+- Undefined placeholders are surfaced as a structured authoring/validation issue or
+  rendered as an explicit empty/marker token; they never leak the raw context object or
+  adjacent keys.
+
+### Path / repo handling (FR-003) — `spec_id` and `repo_path` are untrusted
+
+- `spec_id` resolves to a `.dot` path under the repo and `repo_path` selects the git repo;
+  both arrive from tool input. The `PipelineStore` adapter MUST confine all reads/writes to
+  the configured repo root: reject `spec_id`/path components containing `..`, absolute
+  paths, or path separators that escape the root; normalize then verify the resolved real
+  path is inside the root. No symlink-following out of the root.
+- `ensure_repo`/`save` MUST NOT initialize a git repo or write `.dot` files outside the
+  intended root, and MUST NOT operate on a caller-named arbitrary system directory.
+
+### Subprocess / git invocation — no shell, argument arrays only
+
+- All git invocations (init, add, commit) behind `PipelineStore` MUST use argument-vector
+  `subprocess` (`shell=False`), never string interpolation into a shell. `spec_id`, file
+  names, and any commit message MUST be passed as discrete args, never concatenated into a
+  command line, to preclude command/option injection (including leading-dash option
+  injection — use `--` separators before user-influenced positionals).
+
+### Idempotency-key integrity — constrained `node_id` / `run_id`
+
+- The key `attractor:<run_id>:<node_id>:attempt:<n>` is delimiter-based; a `node_id` (from
+  untrusted DOT) or `run_id` containing `:` could forge a collision with another node's key,
+  causing card-creation dedup to skip or merge unrelated work. Validation MUST restrict
+  `node_id` to a safe charset (e.g. `[A-Za-z0-9_-]`) that excludes the `:` delimiter, and
+  `run_id` MUST be plugin-generated (not caller-supplied) from a safe alphabet. The
+  `IdempotencyKey` factory is the single place that enforces this invariant.
+
+### Gate-verdict trust (FR-009) — worker output is not authoritative truth
+
+- The goal-gate verdict (`gate: pass|fail`, plus the `additionalProperties: true` card
+  result) is written by the worker performing the gated node and is therefore attacker- or
+  error-influenced. The engine MUST treat a missing/malformed `gate` field on a GATE card as
+  **fail** (route to retry target), never default-pass, so a silent or garbled result cannot
+  bypass an exit gate. Only the whitelisted, schema-validated fields are consumed from the
+  card result; unknown properties are ignored, not merged into routing/state.
+
+### Tool-node allowlisting (FR-012)
+
+- `ToolNodeRegistry.run(tool_name, context)` resolves `tool_name` from DOT (untrusted). The
+  registry MUST resolve only an explicit allowlist of registered deterministic tools;
+  an unknown `tool_name` is a **validation error** at authoring time (FR-004) and a safe
+  refusal at runtime — never a dynamic import or arbitrary callable lookup.
+
+### Resource limits
+
+- DOT parsing (`DotSerializer.parse`) on untrusted input MUST enforce input-size and
+  node/edge-count caps and reject pathological graphs before constructing a `Pipeline`,
+  preventing memory/CPU exhaustion at the authoring entry point.
+
+## Edge Cases & Error Handling
+
+Added by red-team Pass 1.
+
+### Concurrent advancement — the hook and the reconciler can race
+
+- A run can be advanced from two places at once: the in-worker `post_tool_call` hook (R4)
+  and the `reconcile` path (on_session_start; and potentially more than one session). Card
+  *creation* is idempotent via the key, but the **plugin SQLite RunStateStore mutation**
+  (advancing `RunNode.attempt`, run status, and especially the `last_seen_event_id` cursor)
+  is not inherently concurrency-safe. Two advancers processing the same completion event can
+  double-advance the state machine or clobber the cursor (lost update).
+- Mitigation: serialize advancement **per run**. Use a per-run guard — a SQLite
+  transaction with the cursor compare-and-set (only advance the cursor from the value the
+  advancer read; on mismatch, re-read and re-evaluate) so concurrent advancers converge
+  rather than corrupt. The advance core MUST be safe to run twice on the same event with no
+  net effect beyond the first (true reducer idempotency on *state*, not only on cards).
+
+### SQLite under multi-process access
+
+- The plugin-owned DB is written by many worker processes (each fires the hook) plus the
+  reconcile session. Default SQLite locking yields `database is locked` errors under
+  contention. The SQLite adapter MUST enable WAL mode and a `busy_timeout`, wrap each
+  advancement in a single transaction, and surface lock contention as a retryable safe
+  failure (handed to the reconciler) rather than a raised exception crossing the plugin
+  boundary.
+
+### Partial failure between card creation and state persistence
+
+- If a follow-up card is created but the process dies before the `RunNode`/cursor write, the
+  attempt counter must be **re-derivable deterministically from the event log on replay**,
+  not read from a pre-incremented persisted counter that was lost. Pin the `attempt` value
+  as a deterministic function of the (run, node, observed prior attempts) so replay rebuilds
+  the identical idempotency key and the dedup makes re-creation a no-op. Document this as the
+  invariant the `save_run`-last ordering depends on.
+
+### Goal-gate exhaustion and unbounded loops
+
+- `max_attempts >= 1` bounds gate retries; on exhaustion the run transitions to `BLOCKED`
+  (data-model). Confirm there is no path where an unsatisfied gate with a still-reachable
+  retry target loops without incrementing the attempt counter (e.g. a gate whose retry
+  target re-enters the gate via a different edge). The attempt counter MUST advance on every
+  gate failure so exhaustion is guaranteed.
+
+### Dependency failure — kanban / event-log unavailable
+
+- If `KanbanBoard.create_card` or `EventLog.read_since` fails (gateway down, REST error),
+  the hook/reconciler MUST leave the run in a re-processable state (cursor un-advanced,
+  status unchanged) and return a safe payload; the next reconcile retries. No advancement may
+  be recorded as durable until its follow-up cards are confirmed created.
+
+## Performance Considerations
+
+Added by red-team Pass 1.
+
+### Bounded fan-out
+
+- Parallel fan-out (FR-010) creates N sibling cards from a single node; N is currently
+  unbounded and, for a pipeline authored from untrusted DOT, is a board-exhaustion vector.
+  Enforce a configurable maximum fan-out width at validation (FR-004) and at runtime; exceed
+  -> validation error / blocked run with a reported reason rather than flooding the board.
+
+### Bounded event-log replay
+
+- `EventLog.read_since(last_seen_event_id)` after a long outage can return a large slice of
+  `task_events`. Read in bounded batches, advancing and persisting the cursor per batch, so a
+  far-behind reconcile makes monotonic progress without loading the whole log into memory.
+
+### Run-state query shape
+
+- `RunStateStore` lookups on the hot advance path (`get_node_by_task`, `nodes_for_run`,
+  `active_runs`) MUST be indexed (task_id, run_id) so per-completion advancement is not a
+  full-table scan as run/node counts grow.
+
+## Accessibility Requirements
+
+Not applicable. This is a backend Hermes plugin with no user-facing UI surface; the only
+human-facing output is structured JSON tool results and a text pipeline summary. No
+keyboard/screen-reader/visual concerns apply. (Recorded explicitly rather than inventing
+barriers.)
+
 ## Risks & Open Questions
 
 Carried from the spec Assumptions and research residual risks (also tracked in
