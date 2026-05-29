@@ -251,7 +251,50 @@ def advance_on_completion(
 
     if next_edge:
         next_node = node_map.get(next_edge.target_id)
-        if next_node and next_node.shape not in (NodeShape.EXIT,):
+        if next_node and next_node.shape is NodeShape.HUMAN:
+            # HUMAN node: create a HUMAN card, block it, and pause the run.
+            profile = pipeline.resolve_profile(next_node) or ""
+            prompt_template = next_node.prompt or ""
+            body = _expand_prompt(prompt_template, run.context.data)
+            attempt = node_record.attempt + 1 if next_node.node_id == node_record.node_id else 1
+            key = IdempotencyKey.for_node(run.run_id, next_node.node_id, attempt)
+            card = Card(
+                idempotency_key=key,
+                assignee_profile=profile,
+                body=body,
+                parent_task_ids=[card_result.task_id],
+                retry_limit=next_node.retry_limit,
+                kind=CardKind.HUMAN,
+            )
+            human_task_id = kanban.create_card(card)
+            human_run_node = RunNode(
+                run_id=run.run_id,
+                node_id=next_node.node_id,
+                task_id=human_task_id,
+                status=NodeRunStatus.DISPATCHED,
+                attempt=attempt,
+                parent_node_ids=[node_record.node_id],
+            )
+            run_state.upsert_node(human_run_node)
+            # Block the card and transition run to PAUSED_HUMAN (cursor-last).
+            kanban.block_card(
+                human_task_id,
+                reason="Human input required",
+                body=body,
+            )
+            paused_run = Run(
+                run_id=run.run_id,
+                spec_id=run.spec_id,
+                status=RunStatus.PAUSED_HUMAN,
+                context=run.context,
+                created_at=run.created_at,
+                updated_at=now,
+                root_task_id=run.root_task_id,
+                last_seen_event_id=card_result.event_id,
+            )
+            run_state.save_run(paused_run)
+            return
+        if next_node and next_node.shape not in (NodeShape.EXIT, NodeShape.HUMAN):
             profile = pipeline.resolve_profile(next_node) or ""
             prompt_template = next_node.prompt or ""
             body = _expand_prompt(prompt_template, run.context.data)
@@ -292,10 +335,12 @@ def advance_on_completion(
             return
 
     # Save run with updated cursor LAST (FR-024 cursor-last ordering).
+    # Transition PAUSED_HUMAN -> RUNNING when resuming from a completed human card.
+    new_status = RunStatus.RUNNING if run.status is RunStatus.PAUSED_HUMAN else run.status
     updated_run = Run(
         run_id=run.run_id,
         spec_id=run.spec_id,
-        status=run.status,
+        status=new_status,
         context=run.context,
         created_at=run.created_at,
         updated_at=now,

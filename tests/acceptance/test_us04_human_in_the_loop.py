@@ -121,10 +121,6 @@ def _make_fake_state() -> tuple[MagicMock, dict[str, Run], list[RunNode]]:
     return run_state, runs, nodes
 
 
-@pytest.mark.xfail(
-    reason="PAUSED_HUMAN state transition in advance_on_completion not yet implemented (US4)",
-    strict=True,
-)
 def test_human_node_transitions_run_to_paused_human() -> None:
     """Reaching a HUMAN node transitions the run to PAUSED_HUMAN and blocks the card.
 
