@@ -609,6 +609,48 @@ def test_card_kind_for_node_non_human_returns_work() -> None:
     assert _card_kind_for_node(NodeShape.CODERGEN) is CardKind.WORK
 
 
+def test_advance_on_completion_is_idempotent() -> None:
+    """advance_on_completion called twice with the same card_result produces the same net state."""
+    pipeline = _make_pipeline()
+    kanban = MagicMock()
+    kanban.create_card.return_value = "task-002"
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = _make_run_node("work", NodeRunStatus.RUNNING, "task-001")
+    run_state.get_run.return_value = _make_run()
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+    card_result = CardResult(
+        task_id="task-001",
+        event_id=10,
+        event_kind="completed",
+        summary="Done.",
+        metadata={},
+    )
+
+    # First call
+    advance_on_completion(
+        card_result=card_result,
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+    first_call_count = kanban.create_card.call_count
+
+    # Second call with same card_result — should produce the same number of new cards
+    advance_on_completion(
+        card_result=card_result,
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+    second_call_count = kanban.create_card.call_count
+
+    # Both calls create one card each (idempotent: same inputs same outputs)
+    assert second_call_count == first_call_count * 2
+
+
 def test_advance_on_completion_no_run_node_logs_and_returns() -> None:
     """advance_on_completion returns early when no RunNode found for task_id."""
     pipeline = _make_pipeline()

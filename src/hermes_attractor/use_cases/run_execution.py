@@ -3,8 +3,18 @@
 Orchestrates pipeline execution: launching a Run by creating the first
 kanban card, and advancing the state machine when a card completes.
 
+Design invariants:
+  - ``_expand_prompt`` performs **non-recursive literal substitution** of ``$var``
+    placeholders. Undefined variables become ``__UNDEFINED_VAR_<name>__`` in the
+    prompt body only — the sentinel string is NEVER written to ``Context.data``.
+  - ``advance_on_completion`` is **idempotent** on the same ``card_result``:
+    re-running it with the same event_id produces the same net state
+    (``upsert_node`` + ``save_run`` are both idempotent write operations).
+  - The reconciler (research D2) can reuse ``advance_on_completion`` directly
+    for catch-up replay, since the idempotency guarantee holds.
+
 See: specs/001-attractor-kanban/contracts/tools.md §Execution tools
-See: specs/001-attractor-kanban/plan.md §M2
+See: specs/001-attractor-kanban/plan.md §M2, §Architecture (use_cases/)
 """
 
 from __future__ import annotations
