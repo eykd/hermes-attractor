@@ -259,6 +259,7 @@ def launch_run(  # noqa: PLR0913
                     status=NodeRunStatus.DISPATCHED,
                     attempt=1,
                     parent_node_ids=[start_id],
+                    goal_gate_policy=entry_node.goal_gate,
                 )
                 run_state.upsert_node(run_node)
 
@@ -391,6 +392,7 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
                 status=NodeRunStatus.DISPATCHED,
                 attempt=1,
                 parent_node_ids=[node_record.node_id],
+                goal_gate_policy=branch_node.goal_gate,
             )
             run_state.upsert_node(branch_run_node)
         # Save run cursor after all branch dispatches (cursor-last).
@@ -727,6 +729,7 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
                 status=NodeRunStatus.DISPATCHED,
                 attempt=attempt,
                 parent_node_ids=[node_record.node_id],
+                goal_gate_policy=next_node.goal_gate,
             )
             run_state.upsert_node(next_run_node)
         elif next_node and next_node.shape is NodeShape.EXIT:
