@@ -99,6 +99,21 @@ def _reconcile_run(  # noqa: PLR0913
     Reads the EventLog from the cursor and advances the run for each event.
     The cursor is advanced atomically by ``advance_on_completion`` as its last write.
 
+    **Reducer / idempotency property**: processing the same event twice yields the
+    same net state as processing it once. This follows from:
+    - Card creation is deduplicated by idempotency key (``KanbanBoard.create_card``).
+    - ``RunState.upsert_node`` is idempotent (same composite key, same new state).
+    - ``save_run`` overwrites with the same cursor value on replay.
+
+    **Shared advance path**: this function calls ``advance_on_completion`` directly,
+    the same function used by the ``post_tool_call`` hook. There is no separate
+    "reconciler advance" logic — the code path is identical, guaranteeing consistent
+    behaviour between the live and recovery paths.
+
+    **Cursor-last ordering**: ``advance_on_completion`` always calls ``save_run``
+    as its final write. A crash before that write leaves the cursor at its previous
+    value, so the event is re-processed on the next reconcile call (safe replay).
+
     Args:
         last_seen_event_id: The current replay cursor for this run.
         spec_id: The pipeline spec identifier (for loading the DOT).
