@@ -902,6 +902,108 @@ def test_advance_tool_node_to_excluded_shape_returns_without_card() -> None:
     kanban.create_card.assert_not_called()
 
 
+def test_advance_tool_with_registry_returning_non_dict_uses_empty_result() -> None:
+    """TOOL node: tool_registry.run() returning a non-dict falls back to empty result."""
+    start = Node(node_id="start", shape=NodeShape.START)
+    tool_node = Node(node_id="tool_stage", shape=NodeShape.TOOL, profile="tool-runner", prompt="my_tool")
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    pipeline = Pipeline(
+        spec_id="tool-non-dict",
+        nodes=[start, tool_node, exit_],
+        edges=[
+            Edge(source_id="start", target_id="tool_stage"),
+            Edge(source_id="tool_stage", target_id="exit"),
+        ],
+        stylesheet=Stylesheet(rules=[StyleRule(selector="*", profile="default")]),
+    )
+    work_record = RunNode(
+        run_id="run1",
+        node_id="start",
+        task_id="task-start",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=[],
+    )
+    run = _make_run()
+
+    tool_registry = MagicMock()
+    # Return a non-dict value — the cast fallback should produce {}.
+    tool_registry.run.return_value = "not-a-dict"
+
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = work_record
+    run_state.get_run.return_value = run
+
+    kanban = MagicMock()
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    advance_on_completion(
+        card_result=CardResult(task_id="task-start", event_id=1, event_kind="completed", summary=".", metadata={}),
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+        tool_registry=tool_registry,
+    )
+
+    # The run should be saved (context unchanged — no context_updates from the empty fallback).
+    run_state.save_run.assert_called()
+    saved_run: Run = run_state.save_run.call_args[0][0]
+    assert saved_run.context == run.context
+
+
+def test_advance_tool_with_context_updates_applies_updates() -> None:
+    """TOOL node: tool_registry.run() returning a dict with context_updates merges into context."""
+    start = Node(node_id="start", shape=NodeShape.START)
+    tool_node = Node(node_id="tool_stage", shape=NodeShape.TOOL, profile="tool-runner", prompt="my_tool")
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    pipeline = Pipeline(
+        spec_id="tool-context-updates",
+        nodes=[start, tool_node, exit_],
+        edges=[
+            Edge(source_id="start", target_id="tool_stage"),
+            Edge(source_id="tool_stage", target_id="exit"),
+        ],
+        stylesheet=Stylesheet(rules=[StyleRule(selector="*", profile="default")]),
+    )
+    work_record = RunNode(
+        run_id="run1",
+        node_id="start",
+        task_id="task-start",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=[],
+    )
+    run = _make_run()
+
+    tool_registry = MagicMock()
+    # Return a dict with context_updates — should be merged into the run context.
+    tool_registry.run.return_value = {"context_updates": {"injected_key": "injected_value"}}
+
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = work_record
+    run_state.get_run.return_value = run
+
+    kanban = MagicMock()
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    advance_on_completion(
+        card_result=CardResult(task_id="task-start", event_id=1, event_kind="completed", summary=".", metadata={}),
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+        tool_registry=tool_registry,
+    )
+
+    # The run should be saved with the merged context key.
+    run_state.save_run.assert_called()
+    saved_run: Run = run_state.save_run.call_args[0][0]
+    assert saved_run.context.data.get("injected_key") == "injected_value"
+
+
 def test_advance_tool_node_to_non_exit_next_saves_run() -> None:
     """TOOL node followed by a non-EXIT node saves run without marking SUCCEEDED."""
     start = Node(node_id="start", shape=NodeShape.START)

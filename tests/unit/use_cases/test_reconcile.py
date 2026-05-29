@@ -307,3 +307,35 @@ def test_reconcile_does_nothing_when_no_active_runs() -> None:
 
     event_log.read_since.assert_not_called()
     kanban.create_card.assert_not_called()
+
+
+def test_reconcile_run_does_nothing_when_events_empty() -> None:
+    """Reconcile skips pipeline load and advance when event_log.read_since returns []."""
+    run = _make_run(last_seen_event_id=42)
+
+    run_state = MagicMock()
+    run_state.active_runs.return_value = [run]
+
+    event_log = MagicMock()
+    # Active run but no new events since cursor 42.
+    event_log.read_since.return_value = []
+
+    kanban = MagicMock()
+    serializer = MagicMock()
+    store = MagicMock()
+    clock = MagicMock()
+    clock.now.return_value = _LATER
+
+    reconcile(
+        run_state=run_state,
+        event_log=event_log,
+        serializer=serializer,
+        store=store,
+        kanban=kanban,
+        clock=clock,
+    )
+
+    event_log.read_since.assert_called_once_with(42)
+    # Pipeline must NOT be loaded when there are no events to process.
+    store.load.assert_not_called()
+    kanban.create_card.assert_not_called()
