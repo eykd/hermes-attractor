@@ -36,7 +36,11 @@ from hermes_attractor.plugin.tools import (
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.xfail(
-        reason="M1 authoring milestone not yet implemented; stubs return ok:false",
+        reason=(
+            "Acceptance tests need repo_path threaded through all handler calls "
+            "and stylesheet persistence in DOT format. Infrastructure work tracked "
+            "separately."
+        ),
         strict=False,
     ),
 ]

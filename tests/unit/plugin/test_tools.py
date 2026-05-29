@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path  # noqa: TC003  # used in function signatures at runtime
 
 import pytest
 
@@ -45,70 +46,138 @@ def test_handle_echo_missing_message_returns_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Stub authoring handlers (M1 — not yet implemented, return ok:false).
-# These tests verify the stubs are importable, honor the never-raise contract,
-# and return a structured not-implemented error payload.
+# Authoring handlers: never-raise contract (M1 — real implementations).
+# These tests verify that each handler returns a JSON string and never raises,
+# even when the underlying store raises PipelineValidationError (no file/repo).
 # ---------------------------------------------------------------------------
 
 
-def _assert_not_implemented(response: str, tool_name: str) -> None:
-    """Assert that a stub handler returns a well-formed not-implemented error payload."""
-    payload = json.loads(response)
-    assert payload["ok"] is False
-    assert payload["error"] == "NotImplementedError"
-    assert tool_name in payload["message"]
+def _assert_json_response(response: str) -> dict[str, object]:
+    """Assert that a response is a valid JSON string and return the parsed dict."""
+    payload: dict[str, object] = json.loads(response)
+    assert isinstance(payload.get("ok"), bool), "Response must have 'ok' bool field"
+    return payload
 
 
-def test_handle_attractor_create_graph_is_stub() -> None:
-    """handle_attractor_create_graph returns a not-implemented payload (M1 stub)."""
-    _assert_not_implemented(handle_attractor_create_graph({"spec_id": "x"}), "attractor_create_graph")
+def test_handle_attractor_create_graph_never_raises() -> None:
+    """handle_attractor_create_graph returns a JSON string and never raises."""
+    response = handle_attractor_create_graph({"spec_id": "test_pipe", "repo_path": "/nonexistent"})
+    _ = _assert_json_response(response)
 
 
-def test_handle_attractor_add_node_is_stub() -> None:
-    """handle_attractor_add_node returns a not-implemented payload (M1 stub)."""
-    _assert_not_implemented(
-        handle_attractor_add_node({"spec_id": "x", "node_id": "n", "shape": "START"}),
-        "attractor_add_node",
+def test_handle_attractor_add_node_never_raises() -> None:
+    """handle_attractor_add_node returns a JSON string and never raises."""
+    response = handle_attractor_add_node(
+        {"spec_id": "x", "node_id": "n", "shape": "START", "repo_path": "/nonexistent"}
     )
+    _ = _assert_json_response(response)
 
 
-def test_handle_attractor_remove_node_is_stub() -> None:
-    """handle_attractor_remove_node returns a not-implemented payload (M1 stub)."""
-    _assert_not_implemented(
-        handle_attractor_remove_node({"spec_id": "x", "node_id": "n"}),
-        "attractor_remove_node",
+def test_handle_attractor_remove_node_never_raises() -> None:
+    """handle_attractor_remove_node returns a JSON string and never raises."""
+    response = handle_attractor_remove_node({"spec_id": "x", "node_id": "n", "repo_path": "/nonexistent"})
+    _ = _assert_json_response(response)
+
+
+def test_handle_attractor_add_edge_never_raises() -> None:
+    """handle_attractor_add_edge returns a JSON string and never raises."""
+    response = handle_attractor_add_edge(
+        {"spec_id": "x", "source_id": "a", "target_id": "b", "repo_path": "/nonexistent"}
     )
+    _ = _assert_json_response(response)
 
 
-def test_handle_attractor_add_edge_is_stub() -> None:
-    """handle_attractor_add_edge returns a not-implemented payload (M1 stub)."""
-    _assert_not_implemented(
-        handle_attractor_add_edge({"spec_id": "x", "source_id": "a", "target_id": "b"}),
-        "attractor_add_edge",
+def test_handle_attractor_remove_edge_never_raises() -> None:
+    """handle_attractor_remove_edge returns a JSON string and never raises."""
+    response = handle_attractor_remove_edge(
+        {"spec_id": "x", "source_id": "a", "target_id": "b", "repo_path": "/nonexistent"}
     )
+    _ = _assert_json_response(response)
 
 
-def test_handle_attractor_remove_edge_is_stub() -> None:
-    """handle_attractor_remove_edge returns a not-implemented payload (M1 stub)."""
-    _assert_not_implemented(
-        handle_attractor_remove_edge({"spec_id": "x", "source_id": "a", "target_id": "b"}),
-        "attractor_remove_edge",
+def test_handle_attractor_set_stylesheet_never_raises() -> None:
+    """handle_attractor_set_stylesheet returns a JSON string and never raises."""
+    response = handle_attractor_set_stylesheet({"spec_id": "x", "rules": [], "repo_path": "/nonexistent"})
+    _ = _assert_json_response(response)
+
+
+def test_handle_attractor_validate_never_raises() -> None:
+    """handle_attractor_validate returns a JSON string and never raises."""
+    response = handle_attractor_validate({"spec_id": "x", "repo_path": "/nonexistent"})
+    _ = _assert_json_response(response)
+
+
+def test_handle_attractor_summary_never_raises() -> None:
+    """handle_attractor_summary returns a JSON string and never raises."""
+    response = handle_attractor_summary({"spec_id": "x", "repo_path": "/nonexistent"})
+    _ = _assert_json_response(response)
+
+
+# ---------------------------------------------------------------------------
+# Happy-path tests using tmp_path to cover the ok:true return branches.
+# ---------------------------------------------------------------------------
+
+
+def test_handle_attractor_create_and_add_node_ok(tmp_path: Path) -> None:
+    """handle_attractor_add_node returns ok:true when pipeline exists."""
+    repo = str(tmp_path)
+    _ = _assert_json_response(handle_attractor_create_graph({"spec_id": "flow", "repo_path": repo}))
+    response = handle_attractor_add_node({"spec_id": "flow", "node_id": "start", "shape": "START", "repo_path": repo})
+    payload = _assert_json_response(response)
+    assert payload["ok"] is True
+
+
+def test_handle_attractor_remove_node_ok(tmp_path: Path) -> None:
+    """handle_attractor_remove_node returns ok:true when pipeline and node exist."""
+    repo = str(tmp_path)
+    _ = _assert_json_response(handle_attractor_create_graph({"spec_id": "flow", "repo_path": repo}))
+    _ = _assert_json_response(
+        handle_attractor_add_node({"spec_id": "flow", "node_id": "start", "shape": "START", "repo_path": repo})
     )
+    response = handle_attractor_remove_node({"spec_id": "flow", "node_id": "start", "repo_path": repo})
+    payload = _assert_json_response(response)
+    assert payload["ok"] is True
 
 
-def test_handle_attractor_set_stylesheet_is_stub() -> None:
-    """handle_attractor_set_stylesheet returns a not-implemented payload (M1 stub)."""
-    _assert_not_implemented(
-        handle_attractor_set_stylesheet({"spec_id": "x", "rules": []}),
-        "attractor_set_stylesheet",
+def test_handle_attractor_add_and_remove_edge_ok(tmp_path: Path) -> None:
+    """handle_attractor_add_edge and remove_edge return ok:true when pipeline exists."""
+    repo = str(tmp_path)
+    _ = _assert_json_response(handle_attractor_create_graph({"spec_id": "flow", "repo_path": repo}))
+    _ = _assert_json_response(
+        handle_attractor_add_node({"spec_id": "flow", "node_id": "start", "shape": "START", "repo_path": repo})
     )
+    _ = _assert_json_response(
+        handle_attractor_add_node({"spec_id": "flow", "node_id": "exit", "shape": "EXIT", "repo_path": repo})
+    )
+    add_resp = handle_attractor_add_edge(
+        {"spec_id": "flow", "source_id": "start", "target_id": "exit", "repo_path": repo}
+    )
+    assert _assert_json_response(add_resp)["ok"] is True
+
+    remove_resp = handle_attractor_remove_edge(
+        {"spec_id": "flow", "source_id": "start", "target_id": "exit", "repo_path": repo}
+    )
+    assert _assert_json_response(remove_resp)["ok"] is True
 
 
-def test_handle_attractor_validate_is_stub() -> None:
-    """handle_attractor_validate returns a not-implemented payload (M1 stub)."""
-    _assert_not_implemented(handle_attractor_validate({"spec_id": "x"}), "attractor_validate")
+def test_handle_attractor_set_stylesheet_empty_rules_never_raises(tmp_path: Path) -> None:
+    """handle_attractor_set_stylesheet returns JSON (ok:false) when stylesheet doesn't change DOT.
 
-
-def test_handle_attractor_summary_is_stub() -> None:
-    """handle_attractor_summary returns a not-implemented payload (M1 stub)."""
-    _assert_not_implemented(handle_attractor_summary({"spec_id": "x"}), "attractor_summary")
+    Note: setting a stylesheet when the emitted DOT content doesn't change causes git to
+    fail with 'nothing to commit'. The _safe wrapper catches this as PipelineValidationError
+    and returns ok:false. The ok:true happy path is not exercised here because stylesheet
+    rules are not persisted in DOT format (known limitation, to be addressed in a future task).
+    """
+    repo = str(tmp_path)
+    _ = _assert_json_response(handle_attractor_create_graph({"spec_id": "flow", "repo_path": repo}))
+    _ = _assert_json_response(
+        handle_attractor_add_node({"spec_id": "flow", "node_id": "start", "shape": "START", "repo_path": repo})
+    )
+    response = handle_attractor_set_stylesheet(
+        {
+            "spec_id": "flow",
+            "rules": [{"selector": "*", "profile": "default"}],
+            "repo_path": repo,
+        }
+    )
+    _ = _assert_json_response(response)
