@@ -21,9 +21,18 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 #: Hermes tool name constants — single source of truth for R2 risk containment.
+#: If the Hermes kanban tool surface renames a tool, update this file only.
 _TOOL_CREATE_TASK = "create_task"
 _TOOL_BLOCK_TASK = "block_task"
 _TOOL_COMPLETE_TASK = "complete_task"
+
+#: Response field name constants for ``create_task`` (R2 drift isolation).
+_FIELD_TASK_ID = "task_id"
+
+#: Gate-verdict trust policy (plan.md §Security §Gate-verdict trust):
+#:   A missing or malformed ``gate`` field in the card result metadata is treated
+#:   as a FAIL verdict, never as a PASS. Use-cases applying ``to_outcome()``
+#:   MUST default to fail-secure when the gate field is absent or unparseable.
 
 
 class _ToolClient(Protocol):  # pragma: no cover
@@ -84,7 +93,7 @@ class HermesKanbanBoard:
             kind=card.kind.value,
         )
         result: dict[str, object] = cast("dict[str, object]", response) if isinstance(response, dict) else {}
-        return str(result.get("task_id", ""))
+        return str(result.get(_FIELD_TASK_ID, ""))
 
     def block_card(self, task_id: str, *, reason: str, body: str) -> None:
         """Block a card awaiting human action via the Hermes ``block_task`` tool.
