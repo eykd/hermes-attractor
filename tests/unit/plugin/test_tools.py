@@ -311,14 +311,8 @@ def test_handle_attractor_result_never_raises() -> None:
     _ = _assert_json_response(response)
 
 
-def test_handle_attractor_set_stylesheet_empty_rules_never_raises(tmp_path: Path) -> None:
-    """handle_attractor_set_stylesheet returns JSON (ok:false) when stylesheet doesn't change DOT.
-
-    Note: setting a stylesheet when the emitted DOT content doesn't change causes git to
-    fail with 'nothing to commit'. The _safe wrapper catches this as PipelineValidationError
-    and returns ok:false. The ok:true happy path is not exercised here because stylesheet
-    rules are not persisted in DOT format (known limitation, to be addressed in a future task).
-    """
+def test_handle_attractor_set_stylesheet_ok(tmp_path: Path) -> None:
+    """handle_attractor_set_stylesheet returns ok:true with spec_id and rules_count."""
     base = str(tmp_path.parent)
     repo = tmp_path.name
     old_env = os.environ.get("ATTRACTOR_REPO_BASE")
@@ -335,7 +329,12 @@ def test_handle_attractor_set_stylesheet_empty_rules_never_raises(tmp_path: Path
                 "repo_path": repo,
             }
         )
-        _ = _assert_json_response(response)
+        payload = _assert_json_response(response)
+        assert payload["ok"] is True
+        result = payload["result"]
+        assert isinstance(result, dict)
+        assert result["spec_id"] == "flow"
+        assert result["rules_count"] == 1
     finally:
         if old_env is None:
             _ = os.environ.pop("ATTRACTOR_REPO_BASE", None)

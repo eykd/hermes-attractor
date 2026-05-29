@@ -8,11 +8,14 @@ See: specs/001-attractor-kanban/contracts/ports.md §DotSerializer
 
 from __future__ import annotations
 
+import base64
+import json
+
 import pydot
 
 from hermes_attractor.domain.constants import DOT_MAX_EDGES, DOT_MAX_INPUT_BYTES, DOT_MAX_NODES
 from hermes_attractor.domain.exceptions import PipelineValidationError, ValidationIssue
-from hermes_attractor.domain.pipeline import Edge, Node, NodeShape, Pipeline, Stylesheet
+from hermes_attractor.domain.pipeline import Edge, Node, NodeShape, Pipeline, StyleRule, Stylesheet
 
 #: Mapping from Graphviz DOT shape attribute to NodeShape enum value.
 _DOT_SHAPE_TO_NODE_SHAPE: dict[str, NodeShape] = {shape.value: shape for shape in NodeShape}
@@ -104,13 +107,37 @@ class PydotSerializer:
 
         nodes = [self._parse_node(n) for n in pydot_nodes]
         edges = [self._parse_edge(e) for e in pydot_edges]
+        stylesheet = self._parse_stylesheet(graph)
 
         return Pipeline(
             spec_id=spec_id,
             nodes=nodes,
             edges=edges,
-            stylesheet=Stylesheet(rules=[]),
+            stylesheet=stylesheet,
         )
+
+    def _parse_stylesheet(self, graph: pydot.Dot) -> Stylesheet:
+        """Decode stylesheet rules from the graph's ``attractor_stylesheet`` attribute.
+
+        The attribute is a base64-encoded JSON list of ``{selector, profile}`` dicts.
+        If absent or malformed, an empty Stylesheet is returned.
+
+        Args:
+            graph: The pydot graph to read the attribute from.
+
+        Returns:
+            A Stylesheet decoded from the graph attribute, or an empty one.
+        """
+        raw = graph.get_attributes().get("attractor_stylesheet")
+        if raw is None:
+            return Stylesheet(rules=[])
+        try:
+            b64 = _strip_quotes(str(raw))
+            decoded = json.loads(base64.b64decode(b64.encode()).decode())
+            rules = [StyleRule(selector=str(r["selector"]), profile=str(r["profile"])) for r in decoded]
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):  # pragma: no cover  # defensive
+            return Stylesheet(rules=[])
+        return Stylesheet(rules=rules)
 
     def _parse_node(self, pydot_node: pydot.Node) -> Node:
         """Convert a pydot node to a domain Node.
@@ -174,6 +201,59 @@ class PydotSerializer:
             weight=weight,
         )
 
+    def _emit_stylesheet(self, graph: pydot.Dot, stylesheet: Stylesheet) -> None:
+        """Encode stylesheet rules onto the graph as a base64-encoded JSON attribute.
+
+        If the stylesheet is empty, no attribute is written.
+
+        Args:
+            graph: The pydot graph to annotate.
+            stylesheet: The Stylesheet to encode.
+        """
+        if not stylesheet.rules:
+            return
+        rules_json = json.dumps([{"selector": r.selector, "profile": r.profile} for r in stylesheet.rules])
+        b64 = base64.b64encode(rules_json.encode()).decode()
+        graph.obj_dict["attributes"]["attractor_stylesheet"] = f'"{b64}"'
+
+    def _emit_node(self, node: Node) -> pydot.Node:
+        """Build a pydot Node from a domain Node.
+
+        Args:
+            node: The domain Node to convert.
+
+        Returns:
+            A pydot Node with DOT attributes set.
+        """
+        attrs: dict[str, str] = {"shape": node.shape.dot_shape}
+        if node.profile is not None:
+            attrs["profile"] = node.profile
+        if node.prompt is not None:
+            attrs["prompt"] = node.prompt
+        if node.node_class is not None:
+            attrs["class"] = node.node_class
+        if node.retry_limit != 0:
+            attrs["retry_limit"] = str(node.retry_limit)
+        return pydot.Node(node.node_id, **attrs)  # pyright: ignore[reportArgumentType]
+
+    def _emit_edge(self, edge: Edge) -> pydot.Edge:
+        """Build a pydot Edge from a domain Edge.
+
+        Args:
+            edge: The domain Edge to convert.
+
+        Returns:
+            A pydot Edge with DOT attributes set.
+        """
+        edge_attrs: dict[str, str] = {}
+        if edge.condition is not None:
+            edge_attrs["condition"] = edge.condition
+        if edge.label is not None:
+            edge_attrs["label"] = edge.label
+        if edge.weight != 0:
+            edge_attrs["weight"] = str(edge.weight)
+        return pydot.Edge(edge.source_id, edge.target_id, **edge_attrs)  # pyright: ignore[reportArgumentType]
+
     def emit(self, pipeline: Pipeline) -> str:
         """Serialize a Pipeline aggregate to a DOT string.
 
@@ -184,29 +264,9 @@ class PydotSerializer:
             A valid Graphviz DOT string.
         """
         graph = pydot.Dot(graph_name=pipeline.spec_id, graph_type="digraph")
-
+        self._emit_stylesheet(graph, pipeline.stylesheet)
         for node in pipeline.nodes:
-            attrs: dict[str, str] = {"shape": node.shape.dot_shape}
-            if node.profile is not None:
-                attrs["profile"] = node.profile
-            if node.prompt is not None:
-                attrs["prompt"] = node.prompt
-            if node.node_class is not None:
-                attrs["class"] = node.node_class
-            if node.retry_limit != 0:
-                attrs["retry_limit"] = str(node.retry_limit)
-            pydot_node = pydot.Node(node.node_id, **attrs)  # pyright: ignore[reportArgumentType]
-            graph.add_node(pydot_node)
-
+            graph.add_node(self._emit_node(node))
         for edge in pipeline.edges:
-            edge_attrs: dict[str, str] = {}
-            if edge.condition is not None:
-                edge_attrs["condition"] = edge.condition
-            if edge.label is not None:
-                edge_attrs["label"] = edge.label
-            if edge.weight != 0:
-                edge_attrs["weight"] = str(edge.weight)
-            pydot_edge = pydot.Edge(edge.source_id, edge.target_id, **edge_attrs)  # pyright: ignore[reportArgumentType]
-            graph.add_edge(pydot_edge)
-
+            graph.add_edge(self._emit_edge(edge))
         return graph.to_string()

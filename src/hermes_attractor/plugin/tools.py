@@ -244,7 +244,7 @@ def handle_attractor_set_stylesheet(args: dict[str, object]) -> str:
         store = _make_store(args)
         serializer = PydotSerializer()
         _ = set_stylesheet(spec_id=spec_id, rules=rules, store=store, serializer=serializer)
-        return {"spec_id": spec_id, "rules_count": len(rules)}  # pragma: no cover
+        return {"spec_id": spec_id, "rules_count": len(rules)}
 
     return _safe(_produce)
 

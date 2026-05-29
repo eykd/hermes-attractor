@@ -9,7 +9,7 @@ import pytest
 
 from hermes_attractor.adapters.dot_serializer import PydotSerializer
 from hermes_attractor.domain.exceptions import PipelineValidationError
-from hermes_attractor.domain.pipeline import Edge, Node, NodeShape, Pipeline, Stylesheet
+from hermes_attractor.domain.pipeline import Edge, Node, NodeShape, Pipeline, StyleRule, Stylesheet
 from hermes_attractor.ports.dot import DotSerializer
 
 pytestmark = pytest.mark.unit
@@ -230,3 +230,65 @@ def test_pydot_serializer_roundtrip_with_embedded_backslash_in_condition() -> No
     pipeline2 = serializer.parse(dot_out)
     edge2 = next(iter(pipeline2.edges))
     assert edge2.condition == r"path\to\value == 1"
+
+
+# ---------------------------------------------------------------------------
+# Stylesheet round-trip tests
+# ---------------------------------------------------------------------------
+
+
+def test_pydot_serializer_roundtrip_preserves_stylesheet_rules() -> None:
+    """emit() -> parse() preserves non-empty stylesheet rules via graph attribute."""
+    serializer = PydotSerializer()
+    rules = [
+        StyleRule(selector="*", profile="default"),
+        StyleRule(selector="CODERGEN", profile="coder"),
+        StyleRule(selector="#special", profile="vip"),
+    ]
+    pipeline = Pipeline(
+        spec_id="ss_test",
+        nodes=[
+            Node(node_id="start", shape=NodeShape.START),
+            Node(node_id="exit", shape=NodeShape.EXIT),
+        ],
+        edges=[Edge(source_id="start", target_id="exit")],
+        stylesheet=Stylesheet(rules=rules),
+    )
+    dot_out = serializer.emit(pipeline)
+    pipeline2 = serializer.parse(dot_out)
+    assert pipeline2.stylesheet.rules == tuple(rules)
+
+
+def test_pydot_serializer_roundtrip_empty_stylesheet_stays_empty() -> None:
+    """emit() -> parse() with no stylesheet rules produces an empty Stylesheet."""
+    serializer = PydotSerializer()
+    pipeline = Pipeline(
+        spec_id="empty_ss",
+        nodes=[
+            Node(node_id="start", shape=NodeShape.START),
+            Node(node_id="exit", shape=NodeShape.EXIT),
+        ],
+        edges=[Edge(source_id="start", target_id="exit")],
+        stylesheet=Stylesheet(rules=[]),
+    )
+    dot_out = serializer.emit(pipeline)
+    pipeline2 = serializer.parse(dot_out)
+    assert pipeline2.stylesheet.rules == ()
+
+
+def test_pydot_serializer_roundtrip_preserves_stylesheet_with_special_chars() -> None:
+    """emit() -> parse() preserves stylesheet rules with double-quotes in profile names."""
+    serializer = PydotSerializer()
+    rules = [StyleRule(selector=".worker", profile='say "hi"')]
+    pipeline = Pipeline(
+        spec_id="special_chars",
+        nodes=[
+            Node(node_id="start", shape=NodeShape.START),
+            Node(node_id="exit", shape=NodeShape.EXIT),
+        ],
+        edges=[Edge(source_id="start", target_id="exit")],
+        stylesheet=Stylesheet(rules=rules),
+    )
+    dot_out = serializer.emit(pipeline)
+    pipeline2 = serializer.parse(dot_out)
+    assert pipeline2.stylesheet.rules == tuple(rules)
