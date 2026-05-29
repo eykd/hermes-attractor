@@ -88,3 +88,9 @@ Thumbs.db
 tmp/
 runs/
 .ralph.lock
+
+# Transient orchestration / runtime artifacts
+.sp-harden-findings.json
+attractor_runs.db
+attractor_runs.db-shm
+attractor_runs.db-wal
