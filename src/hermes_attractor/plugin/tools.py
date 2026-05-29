@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from hermes_attractor import __version__
 from hermes_attractor.adapters.dot_serializer import PydotSerializer
 from hermes_attractor.adapters.pipeline_store import GitPipelineStore
 from hermes_attractor.adapters.renderer import TextRenderer
+from hermes_attractor.adapters.run_state_store import SqliteRunStateStore
 from hermes_attractor.adapters.system_clock import SystemClock
 from hermes_attractor.domain.pipeline import NodeShape, StyleRule
 from hermes_attractor.use_cases.authoring import (
@@ -29,9 +30,16 @@ from hermes_attractor.use_cases.authoring import (
 )
 from hermes_attractor.use_cases.echo import echo
 from hermes_attractor.use_cases.health import check_health
+from hermes_attractor.use_cases.run_execution import launch_run
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from hermes_attractor.ports.clock import Clock
+    from hermes_attractor.ports.dot import DotSerializer
+    from hermes_attractor.ports.kanban import KanbanBoard
+    from hermes_attractor.ports.pipeline_store import PipelineStore
+    from hermes_attractor.ports.run_state import RunStateStore
 
 
 def _safe(produce: Callable[[], dict[str, object]]) -> str:
@@ -270,35 +278,135 @@ def handle_attractor_summary(args: dict[str, object]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Execution tool stubs (M2 — run launch, status, and result not yet implemented).
+# Execution tool handlers (M2)
 # ---------------------------------------------------------------------------
 
 
-def _not_implemented(tool_name: str) -> str:
-    """Return a standard not-implemented JSON error payload for stub handlers."""
-    msg = f"{tool_name!r} is not yet implemented (M2 run/kanban milestone pending)"
-    return json.dumps({"ok": False, "error": "NotImplementedError", "message": msg})
-
-
-def handle_attractor_run(args: dict[str, object]) -> str:
-    """Handle the ``attractor_run`` tool (STUB — M2 not yet implemented).
+def handle_attractor_run(  # noqa: PLR0913
+    args: dict[str, object],
+    *,
+    kanban: KanbanBoard | None = None,
+    run_state: RunStateStore | None = None,
+    serializer: DotSerializer | None = None,
+    store: PipelineStore | None = None,
+    clock: Clock | None = None,
+) -> str:
+    """Handle the ``attractor_run`` tool: launch a new pipeline run.
 
     Expected inputs: spec_id (str), optional repo_path (str), optional context (dict).
+
+    Args:
+        args: Tool input dict containing ``spec_id`` and optionally ``context``.
+        kanban: Optional KanbanBoard override (for testing).
+        run_state: Optional RunStateStore override (for testing).
+        serializer: Optional DotSerializer override (for testing).
+        store: Optional PipelineStore override (for testing).
+        clock: Optional Clock override (for testing).
     """
-    return _not_implemented("attractor_run")
+
+    def _produce() -> dict[str, object]:
+        spec_id = str(args["spec_id"])
+        raw_context = args.get("context")
+        if isinstance(raw_context, dict):
+            raw_ctx = cast("dict[str, object]", raw_context)
+            initial_context: dict[str, object] = dict(raw_ctx)
+        else:
+            initial_context = {}
+
+        _store = store if store is not None else _make_store(args)
+        _serializer = serializer if serializer is not None else PydotSerializer()
+        _clock = clock if clock is not None else SystemClock()
+
+        if run_state is not None:
+            _run_state = run_state
+        else:
+            _run_state = SqliteRunStateStore(db_path=Path.cwd() / "attractor_runs.db")
+
+        if kanban is not None:
+            _kanban = kanban
+        else:
+            msg = "kanban tool client not configured"
+            raise RuntimeError(msg)
+
+        return launch_run(
+            spec_id=spec_id,
+            initial_context=initial_context,
+            kanban=_kanban,
+            run_state=_run_state,
+            serializer=_serializer,
+            store=_store,
+            clock=_clock,
+        )
+
+    return _safe(_produce)
 
 
-def handle_attractor_status(args: dict[str, object]) -> str:
-    """Handle the ``attractor_status`` tool (STUB — M2 not yet implemented).
+def handle_attractor_status(
+    args: dict[str, object],
+    *,
+    run_state: RunStateStore | None = None,
+) -> str:
+    """Handle the ``attractor_status`` tool: query run status.
 
     Expected inputs: run_id (str).
+
+    Args:
+        args: Tool input dict containing ``run_id``.
+        run_state: Optional RunStateStore override (for testing).
     """
-    return _not_implemented("attractor_status")
+
+    def _produce() -> dict[str, object]:
+        run_id = str(args["run_id"])
+
+        _run_state = (
+            run_state if run_state is not None else SqliteRunStateStore(db_path=Path.cwd() / "attractor_runs.db")
+        )
+        run = _run_state.get_run(run_id)
+        if run is None:
+            msg = f"No run found with run_id={run_id!r}"
+            raise KeyError(msg)
+
+        nodes = _run_state.nodes_for_run(run_id)
+        current_nodes = [n.node_id for n in nodes if n.status.value in ("RUNNING", "DISPATCHED")]
+        context_keys = list(run.context.data.keys())
+
+        return {
+            "run_id": run_id,
+            "status": run.status.value,
+            "current_nodes": current_nodes,
+            "context_keys": context_keys,
+        }
+
+    return _safe(_produce)
 
 
-def handle_attractor_result(args: dict[str, object]) -> str:
-    """Handle the ``attractor_result`` tool (STUB — M2 not yet implemented).
+def handle_attractor_result(
+    args: dict[str, object],
+    *,
+    run_state: RunStateStore | None = None,
+) -> str:
+    """Handle the ``attractor_result`` tool: retrieve run outcome.
 
     Expected inputs: run_id (str).
+
+    Args:
+        args: Tool input dict containing ``run_id``.
+        run_state: Optional RunStateStore override (for testing).
     """
-    return _not_implemented("attractor_result")
+
+    def _produce() -> dict[str, object]:
+        run_id = str(args["run_id"])
+        _run_state = (
+            run_state if run_state is not None else SqliteRunStateStore(db_path=Path.cwd() / "attractor_runs.db")
+        )
+        run = _run_state.get_run(run_id)
+        if run is None:
+            msg = f"No run found with run_id={run_id!r}"
+            raise KeyError(msg)
+        return {
+            "run_id": run_id,
+            "status": run.status.value,
+            "outcome": dict(run.context.data),
+        }
+
+    return _safe(_produce)
