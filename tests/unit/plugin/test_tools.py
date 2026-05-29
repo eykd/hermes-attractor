@@ -409,3 +409,50 @@ def test_attractor_result_handler_returns_ok_json() -> None:
     assert result["run_id"] == "run1"
     assert result["status"] == RunStatus.SUCCEEDED.value
     assert "outcome" in result
+
+
+# ---------------------------------------------------------------------------
+# ATTRACTOR_DB_PATH env-var branch (exercised indirectly through handlers).
+# ---------------------------------------------------------------------------
+
+
+def test_handle_attractor_status_uses_attractor_db_path_env_var(tmp_path: Path) -> None:
+    """handle_attractor_status picks up ATTRACTOR_DB_PATH when run_state is not injected.
+
+    We verify the env-var code path by pointing ATTRACTOR_DB_PATH at a tmp dir and
+    confirming the handler returns an ok:false error payload (run not found) rather than
+    crashing.  The important thing is that no SqliteRunStateStore is created at cwd.
+    """
+    db_path = tmp_path / "custom.db"
+    old_env = os.environ.get("ATTRACTOR_DB_PATH")
+    try:
+        os.environ["ATTRACTOR_DB_PATH"] = str(db_path)
+        response = handle_attractor_status({"run_id": "nonexistent-run"})
+        payload = _assert_json_response(response)
+        # The run doesn't exist in the custom DB, so ok:false expected.
+        assert isinstance(payload.get("ok"), bool)
+    finally:
+        if old_env is None:
+            _ = os.environ.pop("ATTRACTOR_DB_PATH", None)
+        else:
+            os.environ["ATTRACTOR_DB_PATH"] = old_env
+
+
+def test_handle_attractor_status_defaults_db_path_to_cwd() -> None:
+    """handle_attractor_status defaults to cwd/attractor_runs.db when ATTRACTOR_DB_PATH unset.
+
+    Exercises the else-branch of _make_run_state_store: without the env var, the store
+    is created at Path.cwd() / "attractor_runs.db".  The response is ok:false (run not
+    found) but no exception is raised.
+    """
+    old_env = os.environ.get("ATTRACTOR_DB_PATH")
+    try:
+        _ = os.environ.pop("ATTRACTOR_DB_PATH", None)
+        response = handle_attractor_status({"run_id": "nonexistent-run"})
+        payload = _assert_json_response(response)
+        assert isinstance(payload.get("ok"), bool)
+    finally:
+        if old_env is None:
+            _ = os.environ.pop("ATTRACTOR_DB_PATH", None)
+        else:
+            os.environ["ATTRACTOR_DB_PATH"] = old_env

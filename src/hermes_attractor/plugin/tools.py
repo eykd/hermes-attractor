@@ -8,6 +8,7 @@ this module is the composition root that wires in concrete adapters.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -49,6 +50,21 @@ def _safe(produce: Callable[[], dict[str, object]]) -> str:
     except Exception as exc:  # Hermes contract: handlers must never raise.
         return json.dumps({"ok": False, "error": type(exc).__name__, "message": str(exc)})
     return json.dumps({"ok": True, "result": payload})
+
+
+def _make_run_state_store() -> SqliteRunStateStore:
+    """Construct a SqliteRunStateStore from the ATTRACTOR_DB_PATH env var (or default cwd).
+
+    Reads the ``ATTRACTOR_DB_PATH`` environment variable if set; otherwise defaults to
+    ``Path.cwd() / "attractor_runs.db"``.  Mirrors the ``_make_store()`` /
+    ``ATTRACTOR_REPO_BASE`` pattern.
+
+    Returns:
+        A SqliteRunStateStore backed by the configured database path.
+    """
+    env_db = os.environ.get("ATTRACTOR_DB_PATH")
+    db_path = Path(env_db) if env_db else Path.cwd() / "attractor_runs.db"
+    return SqliteRunStateStore(db_path=db_path)
 
 
 def _make_store(args: dict[str, object]) -> GitPipelineStore:
@@ -322,10 +338,7 @@ def handle_attractor_run(  # noqa: PLR0913
         _serializer = serializer if serializer is not None else PydotSerializer()
         _clock = clock if clock is not None else SystemClock()
 
-        if run_state is not None:
-            _run_state = run_state
-        else:
-            _run_state = SqliteRunStateStore(db_path=Path.cwd() / "attractor_runs.db")
+        _run_state = run_state if run_state is not None else _make_run_state_store()
 
         if kanban is not None:
             _kanban = kanban
@@ -362,9 +375,7 @@ def handle_attractor_status(
 
     def _produce() -> dict[str, object]:
         run_id = str(args["run_id"])
-        _run_state = (
-            run_state if run_state is not None else SqliteRunStateStore(db_path=Path.cwd() / "attractor_runs.db")
-        )
+        _run_state = run_state if run_state is not None else _make_run_state_store()
         return query_run_status(run_id=run_id, run_state=_run_state)
 
     return _safe(_produce)
@@ -386,9 +397,7 @@ def handle_attractor_result(
 
     def _produce() -> dict[str, object]:
         run_id = str(args["run_id"])
-        _run_state = (
-            run_state if run_state is not None else SqliteRunStateStore(db_path=Path.cwd() / "attractor_runs.db")
-        )
+        _run_state = run_state if run_state is not None else _make_run_state_store()
         return query_run_result(run_id=run_id, run_state=_run_state)
 
     return _safe(_produce)
