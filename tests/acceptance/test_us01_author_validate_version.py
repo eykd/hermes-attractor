@@ -65,14 +65,16 @@ def _ok(response: str) -> dict[str, object]:
 # ---------------------------------------------------------------------------
 
 
-def test_author_validate_and_version_pipeline(tmp_path: Path) -> None:
+def test_author_validate_and_version_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Author a branched, goal-gated pipeline; verify it validates clean and is git-tracked.
 
     GIVEN an empty repository
     WHEN the agent authors a multi-node pipeline with a branch and a goal gate
     THEN the pipeline validates clean and is saved as a git-tracked .dot file.
     """
-    repo_path = str(tmp_path)
+    monkeypatch.setenv("ATTRACTOR_REPO_BASE", str(tmp_path.parent))
+    repo_path = tmp_path.name  # relative path within the allowed base
+    abs_repo = str(tmp_path)  # absolute path for git/filesystem checks
     spec_id = "sp_workflow"
 
     _ = _ok(handle_attractor_create_graph({"spec_id": spec_id, "repo_path": repo_path}))
@@ -184,11 +186,11 @@ def test_author_validate_and_version_pipeline(tmp_path: Path) -> None:
     issues = validate_result.get("issues", [])
     assert issues == [], f"Expected no issues, got: {issues}"
 
-    dot_files = list(Path(repo_path).rglob(f"{spec_id}.dot"))
-    assert dot_files, f"Expected a .dot file for spec_id={spec_id!r} in {repo_path}"
+    dot_files = list(Path(abs_repo).rglob(f"{spec_id}.dot"))
+    assert dot_files, f"Expected a .dot file for spec_id={spec_id!r} in {abs_repo}"
 
     git_result = subprocess.run(
-        ["git", "-C", repo_path, "log", "--oneline", "--", f"{spec_id}.dot"],
+        ["git", "-C", abs_repo, "log", "--oneline", "--", f"{spec_id}.dot"],
         capture_output=True,
         text=True,
         check=False,
@@ -206,14 +208,15 @@ def test_author_validate_and_version_pipeline(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_validate_rejects_pipeline_with_no_start_node(tmp_path: Path) -> None:
+def test_validate_rejects_pipeline_with_no_start_node(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Validate rejects a pipeline with no START node, naming an offending element.
 
     GIVEN a pipeline definition with no start node
     WHEN attractor_validate is called
     THEN the result is valid:false with issues listing an offending element and reason.
     """
-    repo = str(tmp_path)
+    monkeypatch.setenv("ATTRACTOR_REPO_BASE", str(tmp_path.parent))
+    repo = tmp_path.name
     spec_id = "no_start"
     _ = _ok(handle_attractor_create_graph({"spec_id": spec_id, "repo_path": repo}))
     _ = _ok(
@@ -241,14 +244,15 @@ def test_validate_rejects_pipeline_with_no_start_node(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_validate_rejects_pipeline_with_dangling_edge(tmp_path: Path) -> None:
+def test_validate_rejects_pipeline_with_dangling_edge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Validate rejects a pipeline with an edge to a nonexistent node.
 
     GIVEN a pipeline definition with an edge referencing a nonexistent target node
     WHEN attractor_validate is called
     THEN the result is valid:false with issues naming the dangling edge source and target.
     """
-    repo = str(tmp_path)
+    monkeypatch.setenv("ATTRACTOR_REPO_BASE", str(tmp_path.parent))
+    repo = tmp_path.name
     spec_id = "dangling_edge"
     _ = _ok(handle_attractor_create_graph({"spec_id": spec_id, "repo_path": repo}))
     _ = _ok(handle_attractor_add_node({"spec_id": spec_id, "node_id": "start", "shape": "START", "repo_path": repo}))
@@ -276,7 +280,7 @@ def test_validate_rejects_pipeline_with_dangling_edge(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_validate_rejects_pipeline_with_unknown_profile(tmp_path: Path) -> None:
+def test_validate_rejects_pipeline_with_unknown_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Validate rejects a pipeline whose node references an undeclared profile.
 
     GIVEN a pipeline definition with a node assigned a profile that does not exist
@@ -288,7 +292,8 @@ def test_validate_rejects_pipeline_with_unknown_profile(tmp_path: Path) -> None:
     it resolves fine. Instead we test with a node that has NO profile and no stylesheet
     fallback — which triggers the missing-profile validation issue.
     """
-    repo = str(tmp_path)
+    monkeypatch.setenv("ATTRACTOR_REPO_BASE", str(tmp_path.parent))
+    repo = tmp_path.name
     spec_id = "no_profile"
     _ = _ok(handle_attractor_create_graph({"spec_id": spec_id, "repo_path": repo}))
     _ = _ok(handle_attractor_add_node({"spec_id": spec_id, "node_id": "start", "shape": "START", "repo_path": repo}))

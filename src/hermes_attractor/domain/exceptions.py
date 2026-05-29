@@ -74,3 +74,12 @@ class RunStateError(AttractorError):
 
 class TraversalError(AttractorError):
     """Raised when traversal cannot continue (no selectable edge or inconsistent graph)."""
+
+
+class RepoPathConfinementError(AttractorError):
+    """Raised when a caller-supplied repo_path is not confined to the allowed base directory.
+
+    This protects against path-traversal attacks where a malicious or buggy caller
+    supplies an absolute path or a path with ``..`` segments that would allow git
+    operations to reach arbitrary filesystem locations.
+    """

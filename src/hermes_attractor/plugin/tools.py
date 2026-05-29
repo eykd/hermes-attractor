@@ -8,6 +8,7 @@ this module is the composition root that wires in concrete adapters.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -17,6 +18,7 @@ from hermes_attractor.adapters.pipeline_store import GitPipelineStore
 from hermes_attractor.adapters.renderer import TextRenderer
 from hermes_attractor.adapters.run_state_store import SqliteRunStateStore
 from hermes_attractor.adapters.system_clock import SystemClock
+from hermes_attractor.domain.exceptions import RepoPathConfinementError
 from hermes_attractor.domain.pipeline import NodeShape, StyleRule
 from hermes_attractor.use_cases.authoring import (
     add_edge,
@@ -51,18 +53,62 @@ def _safe(produce: Callable[[], dict[str, object]]) -> str:
     return json.dumps({"ok": True, "result": payload})
 
 
+def _repo_base() -> Path:
+    """Return the allowed base directory for repo_path confinement.
+
+    Reads the ``ATTRACTOR_REPO_BASE`` environment variable if set; otherwise
+    defaults to the current working directory.
+
+    Returns:
+        The resolved base Path that all repo_path values must be relative to.
+    """
+    env_base = os.environ.get("ATTRACTOR_REPO_BASE")
+    return Path(env_base).resolve() if env_base else Path.cwd()
+
+
 def _make_store(args: dict[str, object]) -> GitPipelineStore:
     """Construct a GitPipelineStore from the repo_path arg (or default cwd).
+
+    The caller-supplied ``repo_path`` is validated and confined to
+    :func:`_repo_base`. Absolute paths and paths with ``..`` segments are
+    rejected outright; relative paths are resolved against the base and must
+    remain within it.
 
     Args:
         args: The tool input dict; may contain ``repo_path`` key.
 
     Returns:
-        A GitPipelineStore rooted at the specified or default path.
+        A GitPipelineStore rooted at the confined path.
+
+    Raises:
+        RepoPathConfinementError: If ``repo_path`` escapes the allowed base.
     """
     repo_path = args.get("repo_path")
-    root = Path(str(repo_path)) if repo_path else Path.cwd()
-    return GitPipelineStore(repo_root=root)
+    if not repo_path:
+        return GitPipelineStore(repo_root=_repo_base())
+
+    path_str = str(repo_path)
+    candidate = Path(path_str)
+
+    # Reject absolute paths immediately — they bypass relative confinement.
+    if candidate.is_absolute():
+        msg = f"repo_path must be relative, got absolute path: {path_str!r}"
+        raise RepoPathConfinementError(msg)
+
+    # Reject any path that contains '..' components before resolution.
+    if ".." in candidate.parts:
+        msg = f"repo_path must not contain '..' segments: {path_str!r}"
+        raise RepoPathConfinementError(msg)
+
+    base = _repo_base()
+    resolved = (base / candidate).resolve()
+
+    # After resolution, the path must still be within the base.
+    if not resolved.is_relative_to(base):
+        msg = f"repo_path resolves outside allowed base {base}: {path_str!r}"
+        raise RepoPathConfinementError(msg)
+
+    return GitPipelineStore(repo_root=resolved)
 
 
 # ---------------------------------------------------------------------------
