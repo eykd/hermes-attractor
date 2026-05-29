@@ -31,17 +31,11 @@ from hermes_attractor.domain.pipeline import (
 from hermes_attractor.domain.run import IdempotencyKey, NodeRunStatus, Run, RunNode, RunStatus
 
 try:
-    from hermes_attractor.use_cases.reconcile import reconcile  # type: ignore[import-untyped]
+    from hermes_attractor.use_cases.reconcile import reconcile
 except ImportError:
     reconcile = None  # not yet implemented
 
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.xfail(
-        reason="US3 reconcile use case not yet implemented",
-        strict=True,
-    ),
-]
+pytestmark = pytest.mark.integration
 
 _NOW = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
 _LATER = datetime.datetime(2026, 1, 1, second=30, tzinfo=datetime.UTC)
