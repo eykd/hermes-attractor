@@ -310,6 +310,16 @@ def advance_on_completion(  # noqa: PLR0912, PLR0915, PLR0911, C901
     # Goal gate routing: when a gate node fails and has a GoalGatePolicy, route to
     # the retry_target with incremented attempt count. If max_attempts is exhausted,
     # transition the run to BLOCKED.
+    #
+    # ATTEMPT COUNTER INVARIANT: ``next_attempt`` is derived from
+    # ``nodes_for_run`` (durable RunNode state), not from the event log.
+    # This guarantees that every gate failure path — including those processed
+    # by the reconciler — advances the attempt counter exactly once per failure
+    # and is safe across batch boundaries. There is no path that fails the gate
+    # without incrementing the attempt counter.
+    #
+    # Gate verdict is parsed via ``_gate_verdict_pass`` which returns ``False``
+    # for any missing or malformed ``gate`` field (fail-secure per security spec).
     if not gate_passed and node_record.goal_gate_policy is not None:
         policy = node_record.goal_gate_policy
         retry_target = policy.retry_target
