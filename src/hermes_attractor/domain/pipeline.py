@@ -9,9 +9,10 @@ See: specs/001-attractor-kanban/data-model.md §Domain entities
 
 from __future__ import annotations
 
+import copy
 import enum
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from hermes_attractor.domain.exceptions import ValidationIssue
 
@@ -468,3 +469,86 @@ class Pipeline:
         if node.profile is not None:
             return node.profile
         return self.stylesheet.resolve(node)
+
+
+@dataclass(frozen=True)
+class Context:
+    """Shared key/value state threaded through a Run (FR-008).
+
+    Immutable: mutation operations return new instances.
+
+    Attributes:
+        data: JSON-serializable mapping of context keys to values.
+    """
+
+    data: Mapping[str, object]
+
+    def __init__(self, data: Mapping[str, object]) -> None:
+        """Initialise with a key/value mapping.
+
+        Args:
+            data: JSON-serializable mapping of context keys to values.
+        """
+        super().__init__()
+        object.__setattr__(self, "data", dict(data))
+
+    def apply(self, updates: Mapping[str, object]) -> Context:
+        """Return a new Context with the given updates applied.
+
+        Args:
+            updates: Key/value pairs to merge into the current data.
+
+        Returns:
+            A new Context with the merged data.
+        """
+        merged = {**self.data, **updates}
+        return Context(data=merged)
+
+    def clone(self) -> Context:
+        """Return a deep copy of this Context for fan-out branches.
+
+        Returns:
+            A new Context with a deep-copied data mapping.
+        """
+        return Context(data=copy.deepcopy(dict(self.data)))
+
+    def merge(self, branches: Sequence[Context]) -> Context:
+        """Return a new Context that merges branch contexts (deterministic fan-in).
+
+        Rules (R-MERGE):
+          - Disjoint keys are unioned.
+          - Conflicting keys: last-writer-by-branch-order wins; conflicts recorded
+            under the reserved ``_merge_conflicts`` key.
+          - Same-key lists are concatenated in branch order.
+
+        Args:
+            branches: Ordered sequence of branch Contexts to merge.
+
+        Returns:
+            A new Context with the merged data.
+        """
+        merged: dict[str, object] = dict(self.data)
+        conflicts: dict[str, list[object]] = {}
+
+        for branch in branches:
+            for key, value in branch.data.items():
+                if key.startswith("_"):
+                    continue  # skip reserved keys
+                if key in merged:
+                    existing = merged[key]
+                    if isinstance(existing, list) and isinstance(value, list):
+                        existing_list: list[object] = cast("list[object]", existing)
+                        value_list: list[object] = cast("list[object]", value)
+                        merged[key] = existing_list + value_list
+                    else:
+                        if key not in conflicts:
+                            conflicts[key] = [existing]
+                        conflicts[key].append(value)
+                        merged[key] = value
+                else:
+                    merged[key] = value
+
+        if conflicts:
+            merged["_merge_conflicts"] = conflicts
+
+        return Context(data=merged)

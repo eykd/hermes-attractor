@@ -1,4 +1,4 @@
-"""Unit tests for the Pipeline domain model (NodeShape, Node, GoalGatePolicy, Edge, Stylesheet, Pipeline).
+"""Unit tests for the Pipeline domain model (NodeShape, Node, GoalGatePolicy, Edge, Stylesheet, Pipeline, Context).
 
 These tests constitute the RED phase for M1 (authoring core). They fail until
 src/hermes_attractor/domain/pipeline.py is implemented.
@@ -6,9 +6,12 @@ src/hermes_attractor/domain/pipeline.py is implemented.
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from hermes_attractor.domain.pipeline import (
+    Context,
     Edge,
     GoalGatePolicy,
     Node,
@@ -446,3 +449,109 @@ def test_pipeline_validate_valid_goal_gate_passes() -> None:
     pipeline = Pipeline(spec_id="test", nodes=nodes, edges=edges, stylesheet=Stylesheet(rules=[]))
     issues = pipeline.validate()
     assert issues == [], f"Expected no issues for valid goal gate, got: {issues}"
+
+
+# ---------------------------------------------------------------------------
+# Context
+# ---------------------------------------------------------------------------
+
+
+def test_context_stores_data() -> None:
+    """Context stores its data mapping."""
+    ctx = Context(data={"key": "value"})
+    assert ctx.data == {"key": "value"}
+
+
+def test_context_apply_returns_merged_context() -> None:
+    """Context.apply returns a new Context with updates merged."""
+    ctx = Context(data={"a": 1})
+    new_ctx = ctx.apply({"b": 2})
+    assert new_ctx.data == {"a": 1, "b": 2}
+    assert ctx.data == {"a": 1}  # original is unchanged (immutable)
+
+
+def test_context_apply_overwrites_existing_key() -> None:
+    """Context.apply overwrites an existing key with the updated value."""
+    ctx = Context(data={"a": 1, "b": 2})
+    new_ctx = ctx.apply({"a": 99})
+    assert new_ctx.data["a"] == 99
+    assert new_ctx.data["b"] == 2
+
+
+def test_context_clone_returns_deep_copy() -> None:
+    """Context.clone returns an independent deep copy."""
+    original_list: list[int] = [1, 2, 3]
+    ctx = Context(data={"items": original_list})
+    clone = ctx.clone()
+    assert clone.data["items"] == [1, 2, 3]
+    # Mutating the original list does NOT affect the clone
+    original_list.append(4)
+    assert clone.data["items"] == [1, 2, 3]
+
+
+def test_context_merge_disjoint_keys() -> None:
+    """Context.merge unions disjoint keys from all branches."""
+    base = Context(data={"a": 1})
+    b1 = Context(data={"b": 2})
+    b2 = Context(data={"c": 3})
+    merged = base.merge([b1, b2])
+    assert merged.data["a"] == 1
+    assert merged.data["b"] == 2
+    assert merged.data["c"] == 3
+
+
+def test_context_merge_list_concatenation() -> None:
+    """Context.merge concatenates lists for the same key across branches."""
+    base = Context(data={})
+    b1 = Context(data={"items": [1, 2]})
+    b2 = Context(data={"items": [3, 4]})
+    merged = base.merge([b1, b2])
+    assert merged.data["items"] == [1, 2, 3, 4]
+
+
+def test_context_merge_conflict_records_last_writer() -> None:
+    """Context.merge records conflicts and last-writer wins for scalar conflicts."""
+    base = Context(data={})
+    b1 = Context(data={"x": "first"})
+    b2 = Context(data={"x": "second"})
+    merged = base.merge([b1, b2])
+    # Last writer wins
+    assert merged.data["x"] == "second"
+    # Conflict recorded
+    assert "_merge_conflicts" in merged.data
+    conflicts = merged.data["_merge_conflicts"]
+    assert isinstance(conflicts, dict)
+    assert "x" in conflicts
+
+
+def test_context_merge_skips_reserved_keys() -> None:
+    """Context.merge skips reserved keys (starting with '_') from branches."""
+    base = Context(data={})
+    branch = Context(data={"_internal": "should be ignored", "normal": "kept"})
+    merged = base.merge([branch])
+    assert "normal" in merged.data
+    assert "_internal" not in merged.data
+
+
+def test_context_merge_no_conflicts_no_merge_conflicts_key() -> None:
+    """Context.merge does not add '_merge_conflicts' when there are no conflicts."""
+    base = Context(data={"a": 1})
+    branch = Context(data={"b": 2})
+    merged = base.merge([branch])
+    assert "_merge_conflicts" not in merged.data
+
+
+def test_context_merge_conflict_records_all_writers_for_three_branches() -> None:
+    """Context.merge records all conflicting values when three branches conflict on the same key."""
+    base = Context(data={})
+    b1 = Context(data={"x": "first"})
+    b2 = Context(data={"x": "second"})
+    b3 = Context(data={"x": "third"})
+    merged = base.merge([b1, b2, b3])
+    assert merged.data["x"] == "third"  # last writer wins
+    conflicts = merged.data["_merge_conflicts"]
+    assert isinstance(conflicts, dict)
+    assert "x" in conflicts
+    conflict_values = cast("list[object]", conflicts["x"])
+    assert isinstance(conflict_values, list)
+    assert len(conflict_values) >= 3
