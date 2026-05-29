@@ -5,9 +5,12 @@ Tests fail until src/hermes_attractor/domain/edge_selector.py is implemented.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 from hermes_attractor.domain.edge_selector import select
+from hermes_attractor.domain.guard import evaluate as _real_evaluate
 from hermes_attractor.domain.pipeline import Edge
 
 pytestmark = pytest.mark.unit
@@ -93,3 +96,21 @@ def test_select_returns_none_when_all_conditions_fail() -> None:
     ]
     selected = select(edges, context={"status": "pending"}, routing_hint=None, suggested_nodes=[])
     assert selected is None
+
+
+def test_select_evaluates_condition_at_most_once_per_edge() -> None:
+    """evaluate() is called at most once per edge per select() invocation.
+
+    With two conditioned edges, the total evaluate() calls must not exceed
+    len(edges) — the filter step must not re-evaluate during scoring.
+    """
+    edges = [
+        Edge(source_id="a", target_id="first", condition='status == "done"', weight=1),
+        Edge(source_id="a", target_id="second", condition='status == "done"', weight=2),
+    ]
+    with patch("hermes_attractor.domain.edge_selector.evaluate", wraps=_real_evaluate) as mock_evaluate:
+        selected = select(edges, context={"status": "done"}, routing_hint=None, suggested_nodes=[])
+    assert selected is not None
+    assert selected.target_id == "second"
+    # evaluate() must be called at most once per edge (2 edges → at most 2 calls)
+    assert mock_evaluate.call_count <= len(edges)

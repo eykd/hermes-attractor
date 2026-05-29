@@ -49,8 +49,14 @@ def select(
     if not edges:
         return None
 
+    # Pre-compute condition results once per edge to avoid redundant evaluate() calls.
+    # None condition means unconditioned (always passes); True means condition matched.
+    condition_results: dict[int, bool] = {
+        id(edge): evaluate(edge.condition, context) for edge in edges if edge.condition is not None
+    }
+
     # Filter out edges whose condition evaluates False.
-    candidates = [edge for edge in edges if edge.condition is None or evaluate(edge.condition, context)]
+    candidates = [edge for edge in edges if edge.condition is None or condition_results[id(edge)]]
     if not candidates:
         return None
 
@@ -66,7 +72,7 @@ def select(
         Returns:
             Tuple where higher values mean more preferred (except target_id, ascending).
         """
-        condition_score = 1 if edge.condition is not None and evaluate(edge.condition, context) else 0
+        condition_score = 1 if edge.condition is not None and condition_results[id(edge)] else 0
         label_score = 1 if routing_hint is not None and edge.label == routing_hint else 0
         suggested_score = 1 if edge.target_id in suggested_nodes else 0
         return (condition_score, label_score, suggested_score, edge.weight, edge.target_id)
