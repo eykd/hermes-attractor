@@ -25,12 +25,21 @@ _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 class RunStatus(enum.Enum):
     """Lifecycle status of a pipeline Run.
 
+    State machine transitions (enforced at the domain layer)::
+
+        PENDING -> RUNNING               (launch)
+        RUNNING -> PAUSED_HUMAN          (reached a HUMAN node)
+        PAUSED_HUMAN -> RUNNING          (human input received)
+        RUNNING -> BLOCKED               (goal-gate exhausted / terminal node failure)
+        RUNNING -> SUCCEEDED             (reached EXIT, all goal gates satisfied)
+        RUNNING -> FAILED                (terminal failure, no recovery; FR-016)
+
     Attributes:
         PENDING: Run created but not yet started.
         RUNNING: Run is actively executing.
         PAUSED_HUMAN: Run is waiting for a human response at a HUMAN node.
-        BLOCKED: Run is halted pending human review (goal-gate exhausted or
-            terminal node failure).
+        BLOCKED: Run is halted pending human review (goal-gate attempts exhausted
+            or terminal node failure awaiting intervention).
         SUCCEEDED: Run completed successfully (reached EXIT with all gates satisfied).
         FAILED: Run terminated with no recovery path (FR-016).
     """
@@ -46,14 +55,22 @@ class RunStatus(enum.Enum):
 class NodeRunStatus(enum.Enum):
     """Lifecycle status of a single RunNode within a Run.
 
+    Typical progression::
+
+        PENDING -> DISPATCHED -> RUNNING -> SUCCEEDED
+                                         -> PARTIAL    (goal gate not satisfied)
+                                         -> FAILED     (unrecoverable error)
+                                         -> BLOCKED    (awaiting human review)
+
     Attributes:
         PENDING: Node not yet started.
-        DISPATCHED: Card created on the kanban board; waiting for execution.
-        RUNNING: Node is being actively processed.
-        SUCCEEDED: Node completed successfully.
-        PARTIAL: Node completed but only partially satisfied its goal gate.
-        FAILED: Node failed unrecoverably.
-        BLOCKED: Node is blocked pending human review.
+        DISPATCHED: Card created on the kanban board; awaiting pickup.
+        RUNNING: Node's card is actively being executed.
+        SUCCEEDED: Node completed and its goal gate (if any) was satisfied.
+        PARTIAL: Node completed but only partially satisfied its goal gate;
+            a retry may be scheduled via the GoalGatePolicy.
+        FAILED: Node failed unrecoverably (retry limit exhausted).
+        BLOCKED: Node is halted pending human review.
     """
 
     PENDING = "PENDING"
