@@ -279,7 +279,7 @@ def handle_attractor_set_stylesheet(args: dict[str, object]) -> str:
             else []
         )
         rules = [
-            StyleRule(selector=str(r["selector"]), profile=str(r["profile"]))  # type: ignore[index]
+            StyleRule(selector=str(r["selector"]), profile=str(r["profile"]))  # pyright: ignore[reportIndexIssue, reportUnknownArgumentType]
             for r in raw_rules
         ]
         store = _make_store(args)

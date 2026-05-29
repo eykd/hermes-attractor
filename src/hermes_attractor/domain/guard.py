@@ -272,13 +272,13 @@ def _compare(op: str, left: object, right: object) -> bool:
             if op == "=="
             else (left != right)
             if op == "!="
-            else bool(left < right)  # type: ignore[operator]
+            else bool(left < right)  # pyright: ignore[reportOperatorIssue, reportUnknownArgumentType]
             if op == "<"
-            else bool(left <= right)  # type: ignore[operator]
+            else bool(left <= right)  # pyright: ignore[reportOperatorIssue, reportUnknownArgumentType]
             if op == "<="
-            else bool(left > right)  # type: ignore[operator]
+            else bool(left > right)  # pyright: ignore[reportOperatorIssue, reportUnknownArgumentType]
             if op == ">"
-            else bool(left >= right)  # type: ignore[operator]
+            else bool(left >= right)  # pyright: ignore[reportOperatorIssue, reportUnknownArgumentType]
         )
         return bool(result)
     except (TypeError, ValueError):
