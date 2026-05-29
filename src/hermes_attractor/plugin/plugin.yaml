@@ -4,7 +4,7 @@
 # `hermes` CLI is not yet installed (see the project's Open Items). The fields below
 # reflect our current assumption; reconcile with the real manifest spec once Hermes is
 # available. Discovery for local dev uses the `.hermes/plugins/attractor` symlink; the
-# pip entry point (`hermes.plugins` group) is the distribution path.
+# pip entry point (`hermes_agent.plugins` group) is the distribution path.
 name: attractor
 version: 0.1.0
 description: A Hermes Agent plugin built on a hexagonal core (health + echo example tools).
