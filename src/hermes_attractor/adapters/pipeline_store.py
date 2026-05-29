@@ -8,11 +8,12 @@ See: specs/001-attractor-kanban/contracts/ports.md §PipelineStore
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
-from pathlib import Path  # noqa: TC003  # Path is used in runtime annotations
+from pathlib import Path
 
-from hermes_attractor.domain.exceptions import PipelineValidationError, ValidationIssue
+from hermes_attractor.domain.exceptions import PipelineValidationError, RepoPathConfinementError, ValidationIssue
 
 #: Regex for a safe spec_id component: alphanumerics, underscores, and hyphens only.
 _SAFE_SPEC_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -107,6 +108,19 @@ def _git(args: list[str], cwd: Path) -> None:
         )
 
 
+def _repo_base() -> Path:
+    """Return the allowed base directory for repo_path confinement.
+
+    Reads the ``ATTRACTOR_REPO_BASE`` environment variable if set; otherwise
+    defaults to the current working directory.
+
+    Returns:
+        The resolved base Path that all repo_path values must be relative to.
+    """
+    env_base = os.environ.get("ATTRACTOR_REPO_BASE")
+    return Path(env_base).resolve() if env_base else Path.cwd()
+
+
 class GitPipelineStore:
     """PipelineStore adapter backed by a git-tracked directory.
 
@@ -125,6 +139,50 @@ class GitPipelineStore:
         """
         super().__init__()
         self.repo_root = repo_root
+
+    @classmethod
+    def from_env(cls, repo_path: str | None = None) -> GitPipelineStore:
+        """Construct a GitPipelineStore from a caller-supplied path, confined to the allowed base.
+
+        Reads the ``ATTRACTOR_REPO_BASE`` environment variable (or defaults to cwd) to
+        determine the confinement base.  The caller-supplied ``repo_path`` is validated:
+        absolute paths and paths with ``..`` segments are rejected outright; relative paths
+        are resolved against the base and must remain within it.
+
+        Args:
+            repo_path: A relative path string within the allowed base, or ``None`` / empty
+                to use the base directory itself.
+
+        Returns:
+            A GitPipelineStore rooted at the confined path.
+
+        Raises:
+            RepoPathConfinementError: If ``repo_path`` escapes the allowed base.
+        """
+        if not repo_path:
+            return cls(repo_root=_repo_base())
+
+        candidate = Path(repo_path)
+
+        # Reject absolute paths immediately — they bypass relative confinement.
+        if candidate.is_absolute():
+            msg = f"repo_path must be relative, got absolute path: {repo_path!r}"
+            raise RepoPathConfinementError(msg)
+
+        # Reject any path that contains '..' components before resolution.
+        if ".." in candidate.parts:
+            msg = f"repo_path must not contain '..' segments: {repo_path!r}"
+            raise RepoPathConfinementError(msg)
+
+        base = _repo_base()
+        resolved = (base / candidate).resolve()
+
+        # After resolution, the path must still be within the base.
+        if not resolved.is_relative_to(base):
+            msg = f"repo_path resolves outside allowed base {base}: {repo_path!r}"
+            raise RepoPathConfinementError(msg)
+
+        return cls(repo_root=resolved)
 
     def ensure_repo(self) -> None:
         """Initialize a git repository in repo_root if one does not already exist.

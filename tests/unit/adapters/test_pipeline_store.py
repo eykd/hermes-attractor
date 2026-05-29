@@ -5,6 +5,7 @@ Tests fail until ports/pipeline_store.py and adapters/pipeline_store.py are impl
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from hermes_attractor.adapters.pipeline_store import (
     GitPipelineStore,
     _validate_spec_id,  # pyright: ignore[reportPrivateUsage]
 )
-from hermes_attractor.domain.exceptions import PipelineValidationError
+from hermes_attractor.domain.exceptions import PipelineValidationError, RepoPathConfinementError
 from hermes_attractor.ports.pipeline_store import PipelineStore
 
 pytestmark = pytest.mark.unit
@@ -122,6 +123,84 @@ def test_git_pipeline_store_raises_on_load_missing_file(tmp_path: Path) -> None:
     store.ensure_repo()
     with pytest.raises(PipelineValidationError):
         _ = store.load("another_nonexistent")
+
+
+def test_from_env_returns_cwd_store_when_no_repo_path() -> None:
+    """GitPipelineStore.from_env with no repo_path returns a store rooted at the base."""
+    store = GitPipelineStore.from_env(None)
+    assert store.repo_root == Path.cwd()
+
+
+def test_from_env_returns_cwd_store_when_empty_repo_path() -> None:
+    """GitPipelineStore.from_env with an empty string returns a store rooted at the base."""
+    store = GitPipelineStore.from_env("")
+    assert store.repo_root == Path.cwd()
+
+
+def test_from_env_rejects_absolute_repo_path() -> None:
+    """GitPipelineStore.from_env raises RepoPathConfinementError for an absolute path."""
+    with pytest.raises(RepoPathConfinementError, match="must be relative"):
+        _ = GitPipelineStore.from_env("/tmp/evil")  # noqa: S108
+
+
+def test_from_env_rejects_dotdot_repo_path() -> None:
+    """GitPipelineStore.from_env raises RepoPathConfinementError for paths with '..' segments."""
+    with pytest.raises(RepoPathConfinementError, match="must not contain"):
+        _ = GitPipelineStore.from_env("../escape")
+
+
+def test_from_env_rejects_symlink_escaping_base(tmp_path: Path) -> None:
+    """GitPipelineStore.from_env rejects a symlinked path resolving outside the base.
+
+    Exercises the post-resolution is_relative_to guard that catches symlink-based escapes
+    slipping past the '..' and is_absolute early checks.
+    """
+    outside = tmp_path.parent / "outside_dir"
+    outside.mkdir()
+    link = tmp_path / "escape_link"
+    link.symlink_to(outside)
+
+    old_env = os.environ.get("ATTRACTOR_REPO_BASE")
+    try:
+        os.environ["ATTRACTOR_REPO_BASE"] = str(tmp_path)
+        with pytest.raises(RepoPathConfinementError, match="outside allowed base"):
+            _ = GitPipelineStore.from_env("escape_link")
+    finally:
+        if old_env is None:
+            _ = os.environ.pop("ATTRACTOR_REPO_BASE", None)
+        else:
+            os.environ["ATTRACTOR_REPO_BASE"] = old_env
+
+
+def test_from_env_accepts_relative_path_within_base(tmp_path: Path) -> None:
+    """GitPipelineStore.from_env accepts a relative path within the allowed base."""
+    base = tmp_path.parent
+    subdir_name = tmp_path.name
+
+    old_env = os.environ.get("ATTRACTOR_REPO_BASE")
+    try:
+        os.environ["ATTRACTOR_REPO_BASE"] = str(base)
+        store = GitPipelineStore.from_env(subdir_name)
+        assert store.repo_root == tmp_path.resolve()
+    finally:
+        if old_env is None:
+            _ = os.environ.pop("ATTRACTOR_REPO_BASE", None)
+        else:
+            os.environ["ATTRACTOR_REPO_BASE"] = old_env
+
+
+def test_from_env_uses_attractor_repo_base_env_var(tmp_path: Path) -> None:
+    """GitPipelineStore.from_env uses ATTRACTOR_REPO_BASE env var as the confinement base."""
+    old_env = os.environ.get("ATTRACTOR_REPO_BASE")
+    try:
+        os.environ["ATTRACTOR_REPO_BASE"] = str(tmp_path)
+        store = GitPipelineStore.from_env(None)
+        assert store.repo_root == tmp_path.resolve()
+    finally:
+        if old_env is None:
+            _ = os.environ.pop("ATTRACTOR_REPO_BASE", None)
+        else:
+            os.environ["ATTRACTOR_REPO_BASE"] = old_env
 
 
 def test_validate_spec_id_rejects_sibling_dir_prefix_bypass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
