@@ -22,6 +22,7 @@ from hermes_attractor.domain.pipeline import (
 )
 from hermes_attractor.domain.run import NodeRunStatus, Run, RunNode, RunStatus
 from hermes_attractor.use_cases.reconcile import reconcile
+from hermes_attractor.use_cases.run_execution import advance_on_completion
 
 pytestmark = pytest.mark.unit
 
@@ -155,6 +156,7 @@ def test_reconcile_processes_unprocessed_terminal_events() -> None:
         store=store,
         kanban=kanban,
         clock=clock,
+        advance_fn=advance_on_completion,
     )
 
     # EventLog must have been queried from the run's cursor.
@@ -186,6 +188,7 @@ def test_reconcile_skips_already_succeeded_runs() -> None:
         store=store,
         kanban=kanban,
         clock=clock,
+        advance_fn=advance_on_completion,
     )
 
     # Should not try to advance the succeeded run.
@@ -238,6 +241,7 @@ def test_reconcile_is_idempotent_on_same_events() -> None:
         store=store,
         kanban=kanban,
         clock=clock,
+        advance_fn=advance_on_completion,
     )
     first_create_count = kanban.create_card.call_count
 
@@ -249,6 +253,7 @@ def test_reconcile_is_idempotent_on_same_events() -> None:
         store=store,
         kanban=kanban,
         clock=clock,
+        advance_fn=advance_on_completion,
     )
     second_create_count = kanban.create_card.call_count
 
@@ -278,6 +283,7 @@ def test_reconcile_skips_terminal_status_runs_in_active_list() -> None:
         store=store,
         kanban=kanban,
         clock=clock,
+        advance_fn=advance_on_completion,
     )
 
     event_log.read_since.assert_not_called()
@@ -303,6 +309,7 @@ def test_reconcile_does_nothing_when_no_active_runs() -> None:
         store=store,
         kanban=kanban,
         clock=clock,
+        advance_fn=advance_on_completion,
     )
 
     event_log.read_since.assert_not_called()
@@ -333,6 +340,7 @@ def test_reconcile_run_does_nothing_when_events_empty() -> None:
         store=store,
         kanban=kanban,
         clock=clock,
+        advance_fn=advance_on_completion,
     )
 
     event_log.read_since.assert_called_once_with(42)

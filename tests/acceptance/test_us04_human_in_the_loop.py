@@ -262,6 +262,7 @@ def test_run_resumes_after_human_completes_card_via_reconcile() -> None:
         store=store,
         kanban=kanban,
         clock=clock,
+        advance_fn=advance_on_completion,
     )
 
     # The run should have advanced from PAUSED_HUMAN to SUCCEEDED.

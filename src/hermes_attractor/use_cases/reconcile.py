@@ -12,6 +12,9 @@ Design invariants:
   - Running reconcile twice with the same event log produces the same net state
     (idempotency via card idempotency keys + upsert_node semantics).
 
+The ``advance_fn`` dependency is injected by the caller (plugin / tool layer).
+This keeps use_cases/ free of horizontal imports between sibling modules.
+
 See: specs/001-attractor-kanban/contracts/tools.md §CLI command
 See: specs/001-attractor-kanban/plan.md §M3, §Edge Cases §Concurrent advancement
 """
@@ -22,9 +25,10 @@ import logging
 from typing import TYPE_CHECKING
 
 from hermes_attractor.domain.run import RunStatus
-from hermes_attractor.use_cases.run_execution import advance_on_completion
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from hermes_attractor.ports.clock import Clock
     from hermes_attractor.ports.dot import DotSerializer
     from hermes_attractor.ports.event_log import EventLog
@@ -46,13 +50,18 @@ def reconcile(  # noqa: PLR0913
     store: PipelineStore,
     kanban: KanbanBoard,
     clock: Clock,
+    advance_fn: Callable[..., None],
 ) -> None:
     """Replay unprocessed terminal events for all active runs.
 
     For each active run:
     1. Read events from the EventLog since the run's ``last_seen_event_id``.
-    2. For each unprocessed terminal event, call ``advance_on_completion``.
-    3. ``advance_on_completion`` persists the cursor as its last write (FR-024).
+    2. For each unprocessed terminal event, call ``advance_fn``.
+    3. ``advance_fn`` persists the cursor as its last write (FR-024).
+
+    ``advance_fn`` is injected by the caller so that ``reconcile`` does not
+    depend on any sibling use-case module (hexagonal rule: use_cases → domain
+    + ports only).
 
     Args:
         run_state: The RunStateStore port for reading and persisting run state.
@@ -61,6 +70,9 @@ def reconcile(  # noqa: PLR0913
         store: The PipelineStore port for loading pipeline DOT.
         kanban: The KanbanBoard port for creating follow-up cards.
         clock: The Clock port for timestamps.
+        advance_fn: Callable that advances the run state machine for one
+            completion event.  Signature matches ``advance_on_completion``
+            from ``run_execution`` (minus the optional ``tool_registry``).
     """
     active_runs = run_state.active_runs()
     if not active_runs:
@@ -80,6 +92,7 @@ def reconcile(  # noqa: PLR0913
             store=store,
             kanban=kanban,
             clock=clock,
+            advance_fn=advance_fn,
         )
 
 
@@ -93,11 +106,12 @@ def _reconcile_run(  # noqa: PLR0913
     store: PipelineStore,
     kanban: KanbanBoard,
     clock: Clock,
+    advance_fn: Callable[..., None],
 ) -> None:
     """Process all unprocessed events for a single run.
 
     Reads the EventLog from the cursor and advances the run for each event.
-    The cursor is advanced atomically by ``advance_on_completion`` as its last write.
+    The cursor is advanced atomically by ``advance_fn`` as its last write.
 
     **Reducer / idempotency property**: processing the same event twice yields the
     same net state as processing it once. This follows from:
@@ -105,13 +119,13 @@ def _reconcile_run(  # noqa: PLR0913
     - ``RunState.upsert_node`` is idempotent (same composite key, same new state).
     - ``save_run`` overwrites with the same cursor value on replay.
 
-    **Shared advance path**: this function calls ``advance_on_completion`` directly,
-    the same function used by the ``post_tool_call`` hook. There is no separate
-    "reconciler advance" logic — the code path is identical, guaranteeing consistent
-    behaviour between the live and recovery paths.
+    **Shared advance path**: this function calls ``advance_fn`` (injected by the
+    caller), the same function used by the ``post_tool_call`` hook. There is no
+    separate "reconciler advance" logic — the code path is identical, guaranteeing
+    consistent behaviour between the live and recovery paths.
 
-    **Cursor-last ordering**: ``advance_on_completion`` always calls ``save_run``
-    as its final write. A crash before that write leaves the cursor at its previous
+    **Cursor-last ordering**: ``advance_fn`` always calls ``save_run`` as its
+    final write. A crash before that write leaves the cursor at its previous
     value, so the event is re-processed on the next reconcile call (safe replay).
 
     Args:
@@ -123,6 +137,8 @@ def _reconcile_run(  # noqa: PLR0913
         store: The PipelineStore port.
         kanban: The KanbanBoard port.
         clock: The Clock port.
+        advance_fn: Callable that advances the run state machine for one
+            completion event.
     """
     events = event_log.read_since(last_seen_event_id)
     if not events:
@@ -133,7 +149,7 @@ def _reconcile_run(  # noqa: PLR0913
     pipeline = serializer.parse(dot)
 
     for card_result in events:
-        advance_on_completion(
+        advance_fn(
             card_result=card_result,
             kanban=kanban,
             run_state=run_state,

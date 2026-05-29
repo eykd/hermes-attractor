@@ -29,11 +29,8 @@ from hermes_attractor.domain.pipeline import (
     Stylesheet,
 )
 from hermes_attractor.domain.run import IdempotencyKey, NodeRunStatus, Run, RunNode, RunStatus
-
-try:
-    from hermes_attractor.use_cases.reconcile import reconcile
-except ImportError:
-    reconcile = None  # not yet implemented
+from hermes_attractor.use_cases.reconcile import reconcile
+from hermes_attractor.use_cases.run_execution import advance_on_completion
 
 pytestmark = pytest.mark.integration
 
@@ -223,13 +220,14 @@ def test_reconcile_resumes_run_without_re_executing_completed_nodes() -> None:
     clock.now.return_value = _LATER
 
     # Simulate gateway restart.
-    reconcile(  # pyright: ignore[reportOptionalCall]
+    reconcile(
         run_state=run_state,
         event_log=event_log,
         serializer=serializer,
         store=store,
         kanban=kanban,
         clock=clock,
+        advance_fn=advance_on_completion,
     )
 
     # node_a must NOT have been re-dispatched.
@@ -311,8 +309,24 @@ def test_reconcile_is_idempotent_when_called_multiple_times() -> None:
     clock = MagicMock()
     clock.now.return_value = _LATER
 
-    reconcile(run_state=run_state, event_log=event_log, serializer=serializer, store=store, kanban=kanban, clock=clock)  # pyright: ignore[reportOptionalCall]
-    reconcile(run_state=run_state, event_log=event_log, serializer=serializer, store=store, kanban=kanban, clock=clock)  # pyright: ignore[reportOptionalCall]
+    reconcile(
+        run_state=run_state,
+        event_log=event_log,
+        serializer=serializer,
+        store=store,
+        kanban=kanban,
+        clock=clock,
+        advance_fn=advance_on_completion,
+    )
+    reconcile(
+        run_state=run_state,
+        event_log=event_log,
+        serializer=serializer,
+        store=store,
+        kanban=kanban,
+        clock=clock,
+        advance_fn=advance_on_completion,
+    )
 
     node_b_count = sum(1 for k in created_idempotency_keys if "node_b" in k)
     assert node_b_count == 1, f"node_b dispatched {node_b_count} times; expected 1"
