@@ -201,10 +201,6 @@ def test_gate_pass_proceeds_toward_exit() -> None:
     assert saved_run.status is RunStatus.SUCCEEDED, f"Expected SUCCEEDED after gate pass, got {saved_run.status}"
 
 
-@pytest.mark.xfail(
-    reason="Goal-gate max_attempts exhaustion -> BLOCKED not yet implemented (US6)",
-    strict=True,
-)
 def test_gate_max_attempts_exhausted_blocks_run() -> None:
     """Exhausting max_attempts transitions the run to BLOCKED.
 
@@ -214,12 +210,30 @@ def test_gate_max_attempts_exhausted_blocks_run() -> None:
     """
     pipeline = _make_gate_pipeline(max_attempts=2)
     run = _make_run()
-    # attempt=2 = last allowed attempt (max_attempts=2).
-    gate_record = _make_gate_record("task-gate", attempt=2)
+    # Two previous "work" nodes mean next_attempt=3 > max_attempts=2.
+    gate_policy = GoalGatePolicy(retry_target="work", max_attempts=2)
+    gate_record = _make_gate_record("task-gate", attempt=2, goal_gate=gate_policy)
+    work_1 = RunNode(
+        run_id="run1",
+        node_id="work",
+        task_id="task-work-1",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=1,
+        parent_node_ids=["start"],
+    )
+    work_2 = RunNode(
+        run_id="run1",
+        node_id="work",
+        task_id="task-work-2",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=2,
+        parent_node_ids=["gate"],
+    )
 
     run_state = MagicMock()
     run_state.get_node_by_task.return_value = gate_record
     run_state.get_run.return_value = run
+    run_state.nodes_for_run.return_value = [work_1, work_2, gate_record]
 
     kanban = MagicMock()
     clock = MagicMock()
