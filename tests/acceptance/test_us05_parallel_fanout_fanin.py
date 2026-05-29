@@ -37,13 +37,7 @@ from hermes_attractor.domain.pipeline import (
 from hermes_attractor.domain.run import NodeRunStatus, Run, RunNode, RunStatus
 from hermes_attractor.use_cases.run_execution import advance_on_completion, launch_run
 
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.xfail(
-        reason="FAN_OUT/FAN_IN nodes not yet implemented in advance_on_completion (US5)",
-        strict=True,
-    ),
-]
+pytestmark = pytest.mark.integration
 
 _NOW = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
 _LATER = datetime.datetime(2026, 1, 1, second=30, tzinfo=datetime.UTC)
@@ -295,6 +289,10 @@ def test_fan_in_resolves_after_all_branch_completions_with_merged_context() -> N
     assert fan_in_records, "fan_in should be dispatched after all branches complete"
 
 
+@pytest.mark.xfail(
+    reason="Context merge from branch metadata updates not yet integrated in advance_on_completion (US5 context merge)",
+    strict=True,
+)
 def test_fan_in_merge_conflict_recorded_under_merge_conflicts_key() -> None:
     """Conflicting context keys from parallel branches appear under _merge_conflicts.
 

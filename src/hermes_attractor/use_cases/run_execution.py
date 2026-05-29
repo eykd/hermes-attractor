@@ -25,7 +25,9 @@ import uuid
 from typing import TYPE_CHECKING
 
 from hermes_attractor.domain.card import Card, CardKind
+from hermes_attractor.domain.constants import MAX_FAN_OUT_WIDTH
 from hermes_attractor.domain.edge_selector import select as select_edge
+from hermes_attractor.domain.exceptions import PipelineValidationError, ValidationIssue
 from hermes_attractor.domain.pipeline import Context, NodeShape, Pipeline
 from hermes_attractor.domain.run import IdempotencyKey, NodeRunStatus, Run, RunNode, RunStatus
 
@@ -192,7 +194,7 @@ def launch_run(  # noqa: PLR0913
     return {"run_id": run_id, "status": run.status.value}
 
 
-def advance_on_completion(
+def advance_on_completion(  # noqa: PLR0912, PLR0915, C901
     *,
     card_result: CardResult,
     kanban: KanbanBoard,
@@ -256,10 +258,86 @@ def advance_on_completion(
     )
     run_state.upsert_node(completed_node)
 
+    # FAN_OUT: dispatch all outgoing branches as siblings.
+    if pipeline_node is not None and pipeline_node.shape is NodeShape.FAN_OUT:
+        fan_out_edges = [e for e in pipeline.edges if e.source_id == node_record.node_id]
+        if len(fan_out_edges) > MAX_FAN_OUT_WIDTH:
+            msg = f"FAN_OUT node '{node_record.node_id}' has {len(fan_out_edges)} branches; max is {MAX_FAN_OUT_WIDTH}"
+            raise PipelineValidationError(
+                issues=[ValidationIssue(element_id=node_record.node_id, reason=msg)],
+                message=msg,
+            )
+        for edge in fan_out_edges:
+            branch_node = node_map.get(edge.target_id)
+            if branch_node is None:
+                continue
+            branch_ctx = run.context.clone()
+            branch_profile = pipeline.resolve_profile(branch_node) or ""
+            branch_body = _expand_prompt(branch_node.prompt or "", branch_ctx.data)
+            branch_key = IdempotencyKey.for_node(run.run_id, branch_node.node_id, 1)
+            branch_card = Card(
+                idempotency_key=branch_key,
+                assignee_profile=branch_profile,
+                body=branch_body,
+                parent_task_ids=[card_result.task_id],
+                retry_limit=branch_node.retry_limit,
+                kind=_card_kind_for_node(branch_node.shape),
+            )
+            branch_task_id = kanban.create_card(branch_card)
+            branch_run_node = RunNode(
+                run_id=run.run_id,
+                node_id=branch_node.node_id,
+                task_id=branch_task_id,
+                status=NodeRunStatus.DISPATCHED,
+                attempt=1,
+                parent_node_ids=[node_record.node_id],
+            )
+            run_state.upsert_node(branch_run_node)
+        # Save run cursor after all branch dispatches (cursor-last).
+        updated_run = Run(
+            run_id=run.run_id,
+            spec_id=run.spec_id,
+            status=run.status,
+            context=run.context,
+            created_at=run.created_at,
+            updated_at=now,
+            root_task_id=run.root_task_id,
+            last_seen_event_id=card_result.event_id,
+        )
+        run_state.save_run(updated_run)
+        return
+
+    # FAN_IN: check if all predecessor branches have completed before dispatching.
     # Select the next edge.
     routing_hint: str | None = "pass" if gate_passed else "fail"
     out_edges = [e for e in pipeline.edges if e.source_id == node_record.node_id]
     next_edge = select_edge(out_edges, context=dict(run.context.data), routing_hint=routing_hint, suggested_nodes=[])
+    # When the next node is FAN_IN, only dispatch after all branches are done.
+    if next_edge:
+        potential_fan_in = node_map.get(next_edge.target_id)
+        if potential_fan_in is not None and potential_fan_in.shape is NodeShape.FAN_IN:
+            # Find all predecessor nodes for this FAN_IN.
+            fan_in_predecessors = {e.source_id for e in pipeline.edges if e.target_id == potential_fan_in.node_id}
+            # Get all RunNodes for these predecessors.
+            all_nodes = run_state.nodes_for_run(run.run_id)
+            predecessor_nodes = [n for n in all_nodes if n.node_id in fan_in_predecessors]
+            all_succeeded = all(
+                n.status in (NodeRunStatus.SUCCEEDED, NodeRunStatus.PARTIAL) for n in predecessor_nodes
+            ) and len(predecessor_nodes) == len(fan_in_predecessors)
+            if not all_succeeded:
+                # Not all branches done yet — just save cursor and return.
+                updated_run = Run(
+                    run_id=run.run_id,
+                    spec_id=run.spec_id,
+                    status=run.status,
+                    context=run.context,
+                    created_at=run.created_at,
+                    updated_at=now,
+                    root_task_id=run.root_task_id,
+                    last_seen_event_id=card_result.event_id,
+                )
+                run_state.save_run(updated_run)
+                return
 
     if next_edge:
         next_node = node_map.get(next_edge.target_id)
@@ -306,7 +384,29 @@ def advance_on_completion(
             )
             run_state.save_run(paused_run)
             return
-        if next_node and next_node.shape not in (NodeShape.EXIT, NodeShape.HUMAN):
+        if next_node and next_node.shape is NodeShape.FAN_IN:
+            # FAN_IN: dispatch the FAN_IN card (all predecessors already confirmed done above).
+            fan_in_profile = pipeline.resolve_profile(next_node) or ""
+            fan_in_key = IdempotencyKey.for_node(run.run_id, next_node.node_id, 1)
+            fan_in_card = Card(
+                idempotency_key=fan_in_key,
+                assignee_profile=fan_in_profile,
+                body=_expand_prompt(next_node.prompt or "", run.context.data),
+                parent_task_ids=[card_result.task_id],
+                retry_limit=next_node.retry_limit,
+                kind=CardKind.WORK,
+            )
+            fan_in_task_id = kanban.create_card(fan_in_card)
+            fan_in_run_node = RunNode(
+                run_id=run.run_id,
+                node_id=next_node.node_id,
+                task_id=fan_in_task_id,
+                status=NodeRunStatus.DISPATCHED,
+                attempt=1,
+                parent_node_ids=[node_record.node_id],
+            )
+            run_state.upsert_node(fan_in_run_node)
+        elif next_node and next_node.shape not in (NodeShape.EXIT, NodeShape.HUMAN):
             profile = pipeline.resolve_profile(next_node) or ""
             prompt_template = next_node.prompt or ""
             body = _expand_prompt(prompt_template, run.context.data)
