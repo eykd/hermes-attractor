@@ -1,0 +1,121 @@
+"""Unit tests for the PipelineStore port and git adapter (RED phase for M1).
+
+Tests fail until ports/pipeline_store.py and adapters/pipeline_store.py are implemented.
+"""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path  # noqa: TC003  # used in function signatures at runtime
+
+import pytest
+
+from hermes_attractor.adapters.pipeline_store import GitPipelineStore
+from hermes_attractor.domain.exceptions import PipelineValidationError
+from hermes_attractor.ports.pipeline_store import PipelineStore
+
+pytestmark = pytest.mark.unit
+
+_SAMPLE_DOT = "digraph test { start [shape=Mdiamond]; exit [shape=Msquare]; start -> exit; }"
+
+
+def test_pipeline_store_protocol_has_load_save_ensure_repo() -> None:
+    """PipelineStore Protocol must declare load, save, and ensure_repo methods."""
+    assert hasattr(PipelineStore, "load")
+    assert hasattr(PipelineStore, "save")
+    assert hasattr(PipelineStore, "ensure_repo")
+    assert callable(PipelineStore.load)
+    assert callable(PipelineStore.save)
+    assert callable(PipelineStore.ensure_repo)
+
+
+def test_git_pipeline_store_ensure_repo_initializes_git(tmp_path: Path) -> None:
+    """GitPipelineStore.ensure_repo initializes a git repo in an empty directory."""
+    store = GitPipelineStore(repo_root=tmp_path)
+    store.ensure_repo()
+    assert (tmp_path / ".git").exists()
+
+
+def test_git_pipeline_store_save_writes_dot_file(tmp_path: Path) -> None:
+    """GitPipelineStore.save writes a .dot file to the repo root."""
+    store = GitPipelineStore(repo_root=tmp_path)
+    store.ensure_repo()
+    store.save("my_pipeline", _SAMPLE_DOT)
+    assert (tmp_path / "my_pipeline.dot").exists()
+
+
+def test_git_pipeline_store_save_commits_dot_file(tmp_path: Path) -> None:
+    """GitPipelineStore.save git-commits the .dot file."""
+    store = GitPipelineStore(repo_root=tmp_path)
+    store.ensure_repo()
+    store.save("my_pipeline", _SAMPLE_DOT)
+
+    result = subprocess.run(
+        ["git", "-C", str(tmp_path), "log", "--oneline", "--", "my_pipeline.dot"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip(), "Expected at least one git commit for my_pipeline.dot"
+
+
+def test_git_pipeline_store_load_returns_dot_text(tmp_path: Path) -> None:
+    """GitPipelineStore.load returns the previously saved DOT text."""
+    store = GitPipelineStore(repo_root=tmp_path)
+    store.ensure_repo()
+    store.save("my_pipeline", _SAMPLE_DOT)
+    loaded = store.load("my_pipeline")
+    assert "start" in loaded
+    assert "exit" in loaded
+
+
+def test_git_pipeline_store_rejects_dotdot_in_spec_id(tmp_path: Path) -> None:
+    """GitPipelineStore raises PipelineValidationError for spec_id containing '..'."""
+    store = GitPipelineStore(repo_root=tmp_path)
+    with pytest.raises(PipelineValidationError):
+        store.save("../escape", _SAMPLE_DOT)
+
+
+def test_git_pipeline_store_rejects_path_separator_in_spec_id(tmp_path: Path) -> None:
+    """GitPipelineStore raises PipelineValidationError for spec_id containing '/'."""
+    store = GitPipelineStore(repo_root=tmp_path)
+    with pytest.raises(PipelineValidationError):
+        store.save("subdir/pipeline", _SAMPLE_DOT)
+
+
+def test_git_pipeline_store_rejects_absolute_spec_id(tmp_path: Path) -> None:
+    """GitPipelineStore raises PipelineValidationError for an absolute spec_id."""
+    store = GitPipelineStore(repo_root=tmp_path)
+    with pytest.raises(PipelineValidationError):
+        store.save("/absolute/path", _SAMPLE_DOT)
+
+
+def test_git_pipeline_store_rejects_empty_spec_id(tmp_path: Path) -> None:
+    """GitPipelineStore raises PipelineValidationError for an empty spec_id."""
+    store = GitPipelineStore(repo_root=tmp_path)
+    with pytest.raises(PipelineValidationError):
+        store.save("", _SAMPLE_DOT)
+
+
+def test_git_pipeline_store_rejects_special_chars_in_spec_id(tmp_path: Path) -> None:
+    """GitPipelineStore raises PipelineValidationError for spec_id with special chars."""
+    store = GitPipelineStore(repo_root=tmp_path)
+    with pytest.raises(PipelineValidationError):
+        store.save("my pipeline!", _SAMPLE_DOT)
+
+
+def test_git_pipeline_store_load_raises_when_file_missing(tmp_path: Path) -> None:
+    """GitPipelineStore.load raises PipelineValidationError when the .dot file does not exist."""
+    store = GitPipelineStore(repo_root=tmp_path)
+    store.ensure_repo()
+    with pytest.raises(PipelineValidationError):
+        _ = store.load("nonexistent_pipeline")
+
+
+def test_git_pipeline_store_raises_on_load_missing_file(tmp_path: Path) -> None:
+    """GitPipelineStore.load raises on a valid spec_id with no matching .dot file."""
+    store = GitPipelineStore(repo_root=tmp_path)
+    store.ensure_repo()
+    with pytest.raises(PipelineValidationError):
+        _ = store.load("another_nonexistent")
