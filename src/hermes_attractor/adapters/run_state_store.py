@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS plugin_run_nodes (
     parent_node_ids_json     TEXT NOT NULL DEFAULT '[]',
     goal_gate_policy_json    TEXT,
     output_ref          TEXT,
+    context_updates_json     TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (run_id, node_id, attempt)
 );
 
@@ -163,6 +164,8 @@ def _row_to_run_node(row: sqlite3.Row) -> RunNode:
     Returns:
         The corresponding RunNode.
     """
+    raw_cu = row["context_updates_json"]
+    context_updates: dict[str, object] = json.loads(raw_cu) if raw_cu else {}
     return RunNode(
         run_id=row["run_id"],
         node_id=row["node_id"],
@@ -172,6 +175,7 @@ def _row_to_run_node(row: sqlite3.Row) -> RunNode:
         parent_node_ids=json.loads(row["parent_node_ids_json"]),
         goal_gate_policy=_json_to_goal_gate(row["goal_gate_policy_json"]),
         output_ref=row["output_ref"],
+        context_updates=context_updates,
     )
 
 
@@ -289,14 +293,16 @@ class SqliteRunStateStore:
                 """
                 INSERT INTO plugin_run_nodes
                     (run_id, node_id, attempt, task_id, status,
-                     parent_node_ids_json, goal_gate_policy_json, output_ref)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     parent_node_ids_json, goal_gate_policy_json, output_ref,
+                     context_updates_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id, node_id, attempt) DO UPDATE SET
                     task_id=excluded.task_id,
                     status=excluded.status,
                     parent_node_ids_json=excluded.parent_node_ids_json,
                     goal_gate_policy_json=excluded.goal_gate_policy_json,
-                    output_ref=excluded.output_ref
+                    output_ref=excluded.output_ref,
+                    context_updates_json=excluded.context_updates_json
                 """,
                 (
                     node.run_id,
@@ -307,6 +313,7 @@ class SqliteRunStateStore:
                     json.dumps(list(node.parent_node_ids)),
                     _goal_gate_to_json(node.goal_gate_policy),
                     node.output_ref,
+                    json.dumps(dict(node.context_updates)),
                 ),
             )
 

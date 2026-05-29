@@ -319,7 +319,15 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
     is_gate = pipeline_node is not None and pipeline_node.goal_gate is not None
     gate_passed = _gate_verdict_pass(card_result.metadata) if is_gate else True
 
-    # Mark the completed node.
+    # Extract context_updates from metadata (FR-008).
+    # For non-TOOL nodes, updates are stored on the RunNode for FAN_IN merge;
+    # for sequential paths they are applied to run.context before next dispatch.
+    raw_meta_updates = card_result.metadata.get("context_updates")
+    node_context_updates: Mapping[str, object] = (
+        cast("Mapping[str, object]", raw_meta_updates) if isinstance(raw_meta_updates, dict) else {}
+    )
+
+    # Mark the completed node (with its context_updates stored for FAN_IN merge).
     completed_node = RunNode(
         run_id=node_record.run_id,
         node_id=node_record.node_id,
@@ -329,6 +337,7 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
         parent_node_ids=node_record.parent_node_ids,
         goal_gate_policy=node_record.goal_gate_policy,
         output_ref=node_record.output_ref,
+        context_updates=node_context_updates,
     )
     run_state.upsert_node(completed_node)
 
@@ -537,12 +546,29 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
             return
         if next_node and next_node.shape is NodeShape.FAN_IN:
             # FAN_IN: dispatch the FAN_IN card (all predecessors already confirmed done above).
+            # Merge branch context_updates using Context.merge() for conflict detection (R-MERGE / FR-008).
+            fan_in_predecessors = {e.source_id for e in pipeline.edges if e.target_id == next_node.node_id}
+            all_nodes_for_merge = run_state.nodes_for_run(run.run_id)
+            fan_in_predecessor_nodes = [n for n in all_nodes_for_merge if n.node_id in fan_in_predecessors]
+            branch_contexts = [Context(data=n.context_updates) for n in fan_in_predecessor_nodes]
+            merged_context = run.context.merge(branch_contexts)
+            # Update run with merged context before dispatching the FAN_IN card.
+            run = Run(
+                run_id=run.run_id,
+                spec_id=run.spec_id,
+                status=run.status,
+                context=merged_context,
+                created_at=run.created_at,
+                updated_at=now,
+                root_task_id=run.root_task_id,
+                last_seen_event_id=run.last_seen_event_id,
+            )
             fan_in_profile = pipeline.resolve_profile(next_node) or ""
             fan_in_key = IdempotencyKey.for_node(run.run_id, next_node.node_id, 1)
             fan_in_card = Card(
                 idempotency_key=fan_in_key,
                 assignee_profile=fan_in_profile,
-                body=_expand_prompt(next_node.prompt or "", run.context.data),
+                body=_expand_prompt(next_node.prompt or "", merged_context.data),
                 parent_task_ids=[card_result.task_id],
                 retry_limit=next_node.retry_limit,
                 kind=CardKind.WORK,

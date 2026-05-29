@@ -14,12 +14,17 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
     from datetime import datetime
 
     from hermes_attractor.domain.pipeline import Context, GoalGatePolicy
 
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+
+
+def _empty_str_obj_dict() -> dict[str, object]:
+    """Return a new empty dict[str, object] for use as a dataclass field default_factory."""
+    return {}
 
 
 class RunStatus(enum.Enum):
@@ -162,6 +167,8 @@ class RunNode:
         parent_node_ids: Ordered list of node_ids whose outputs feed into this node.
         goal_gate_policy: Retry policy if this node is a goal gate, else None.
         output_ref: Reference to the node's result artifact, or None.
+        context_updates: Context key/value updates contributed by this node (FR-008).
+            Stored for FAN_IN merge conflict detection.
     """
 
     run_id: str
@@ -172,6 +179,7 @@ class RunNode:
     task_id: str | None = field(default=None)
     goal_gate_policy: GoalGatePolicy | None = field(default=None)
     output_ref: str | None = field(default=None)
+    context_updates: Mapping[str, object] = field(default_factory=_empty_str_obj_dict)
 
     def __post_init__(self) -> None:
         """Validate invariants after construction.

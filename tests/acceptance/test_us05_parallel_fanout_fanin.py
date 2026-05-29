@@ -289,10 +289,6 @@ def test_fan_in_resolves_after_all_branch_completions_with_merged_context() -> N
     assert fan_in_records, "fan_in should be dispatched after all branches complete"
 
 
-@pytest.mark.xfail(
-    reason="Context merge from branch metadata updates not yet integrated in advance_on_completion (US5 context merge)",
-    strict=True,
-)
 def test_fan_in_merge_conflict_recorded_under_merge_conflicts_key() -> None:
     """Conflicting context keys from parallel branches appear under _merge_conflicts.
 
