@@ -980,6 +980,82 @@ def test_advance_tool_node_to_non_exit_next_saves_run() -> None:
     kanban.create_card.assert_called()
 
 
+def test_advance_tool_node_to_non_exit_saves_run_after_upsert_node() -> None:
+    """TOOL node regular-next path: save_run (cursor) is the last write (FR-024).
+
+    Regression test: previously save_run was called before upsert_node, so a
+    crash between those two writes would advance the cursor past the event without
+    persisting the new RunNode, silently losing the dispatch on reconcile.
+    """
+    start = Node(node_id="start", shape=NodeShape.START)
+    tool_node = Node(node_id="tool_stage", shape=NodeShape.TOOL, profile="tool-runner", prompt="my_tool")
+    another_work = Node(node_id="after_tool", shape=NodeShape.CODERGEN, profile="coder")
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    pipeline = Pipeline(
+        spec_id="tool-then-work-order",
+        nodes=[start, tool_node, another_work, exit_],
+        edges=[
+            Edge(source_id="start", target_id="tool_stage"),
+            Edge(source_id="tool_stage", target_id="after_tool"),
+            Edge(source_id="after_tool", target_id="exit"),
+        ],
+        stylesheet=Stylesheet(rules=[StyleRule(selector="*", profile="default")]),
+    )
+    work_record = RunNode(
+        run_id="run1",
+        node_id="start",
+        task_id="task-start",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=[],
+    )
+    run = _make_run()
+
+    call_order: list[str] = []
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = work_record
+    run_state.get_run.return_value = run
+
+    def _record_upsert(node: object) -> None:
+        """Record that upsert_node was called."""
+        call_order.append("upsert_node")
+
+    def _record_save(run_obj: object) -> None:
+        """Record that save_run was called."""
+        call_order.append("save_run")
+
+    run_state.upsert_node.side_effect = _record_upsert
+    run_state.save_run.side_effect = _record_save
+
+    kanban = MagicMock()
+    kanban.create_card.return_value = "task-after-tool"
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    advance_on_completion(
+        card_result=CardResult(task_id="task-start", event_id=5, event_kind="completed", summary=".", metadata={}),
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    # upsert_node for the SUCCEEDED start node and then for after_tool both happen
+    # before the final save_run that advances the event cursor.
+    assert "save_run" in call_order, "save_run must be called"
+    assert "upsert_node" in call_order, "upsert_node must be called"
+    # The last save_run must come after all upsert_node calls (cursor-last invariant).
+    last_save_run_idx = max(i for i, name in enumerate(call_order) if name == "save_run")
+    last_upsert_node_idx = max(i for i, name in enumerate(call_order) if name == "upsert_node")
+    assert last_save_run_idx > last_upsert_node_idx, (
+        f"save_run (idx {last_save_run_idx}) must come after upsert_node (idx {last_upsert_node_idx}); "
+        f"call order: {call_order}"
+    )
+    # The cursor must be advanced to the processed event.
+    saved_run: Run = run_state.save_run.call_args_list[-1][0][0]
+    assert saved_run.last_seen_event_id == 5
+
+
 # ---------------------------------------------------------------------------
 # Goal gate routing
 # ---------------------------------------------------------------------------

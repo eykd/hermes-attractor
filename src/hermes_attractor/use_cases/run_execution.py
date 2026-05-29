@@ -598,18 +598,6 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
                 updated_context = run.context.apply(updates)
             else:
                 updated_context = run.context
-            # Update run with new context and save cursor.
-            tool_run = Run(
-                run_id=run.run_id,
-                spec_id=run.spec_id,
-                status=run.status,
-                context=updated_context,
-                created_at=run.created_at,
-                updated_at=now,
-                root_task_id=run.root_task_id,
-                last_seen_event_id=card_result.event_id,
-            )
-            run_state.save_run(tool_run)
             # Now select next edge from the TOOL node and continue inline.
             tool_out_edges = [e for e in pipeline.edges if e.source_id == next_node.node_id]
             tool_next_edge = select_edge(
@@ -618,6 +606,7 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
             if tool_next_edge:
                 tool_next_node = node_map.get(tool_next_edge.target_id)
                 if tool_next_node and tool_next_node.shape is NodeShape.EXIT:
+                    # EXIT sub-case: save run as SUCCEEDED — cursor-last, this is the only write.
                     exit_run = Run(
                         run_id=run.run_id,
                         spec_id=run.spec_id,
@@ -635,7 +624,9 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
                     NodeShape.HUMAN,
                     NodeShape.FAN_IN,
                 ):
-                    # Dispatch a card for the next regular node.
+                    # Dispatch a card for the next regular node, then save run cursor-last
+                    # (FR-024: save_run must be the last write so a crash before upsert_node
+                    # does not silently lose the dispatch on reconcile).
                     t_profile = pipeline.resolve_profile(tool_next_node) or ""
                     t_body = _expand_prompt(tool_next_node.prompt or "", updated_context.data)
                     t_key = IdempotencyKey.for_node(run.run_id, tool_next_node.node_id, 1)
@@ -657,7 +648,44 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
                         parent_node_ids=[next_node.node_id],
                     )
                     run_state.upsert_node(t_run_node)
-                    # Save run with new context (already done above).
+                    # Cursor-last: save run after all structural writes are complete.
+                    tool_run = Run(
+                        run_id=run.run_id,
+                        spec_id=run.spec_id,
+                        status=run.status,
+                        context=updated_context,
+                        created_at=run.created_at,
+                        updated_at=now,
+                        root_task_id=run.root_task_id,
+                        last_seen_event_id=card_result.event_id,
+                    )
+                    run_state.save_run(tool_run)
+                else:
+                    # Excluded-shape or unrecognised next node: save run to advance cursor.
+                    tool_run = Run(
+                        run_id=run.run_id,
+                        spec_id=run.spec_id,
+                        status=run.status,
+                        context=updated_context,
+                        created_at=run.created_at,
+                        updated_at=now,
+                        root_task_id=run.root_task_id,
+                        last_seen_event_id=card_result.event_id,
+                    )
+                    run_state.save_run(tool_run)
+            else:
+                # No outgoing edge from TOOL node: save run to advance cursor.
+                tool_run = Run(
+                    run_id=run.run_id,
+                    spec_id=run.spec_id,
+                    status=run.status,
+                    context=updated_context,
+                    created_at=run.created_at,
+                    updated_at=now,
+                    root_task_id=run.root_task_id,
+                    last_seen_event_id=card_result.event_id,
+                )
+                run_state.save_run(tool_run)
             return
         elif next_node and next_node.shape not in (NodeShape.EXIT, NodeShape.HUMAN, NodeShape.TOOL):
             profile = pipeline.resolve_profile(next_node) or ""
