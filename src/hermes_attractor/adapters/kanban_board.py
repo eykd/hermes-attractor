@@ -11,12 +11,13 @@ See: specs/001-attractor-kanban/research.md §R2
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from hermes_attractor.domain.card import Card
+    from hermes_attractor.ports.hermes_tool_client import HermesToolClient
 
 _log = logging.getLogger(__name__)
 
@@ -35,22 +36,6 @@ _FIELD_TASK_ID = "task_id"
 #:   MUST default to fail-secure when the gate field is absent or unparseable.
 
 
-class _ToolClient(Protocol):  # pragma: no cover
-    """Minimal interface for a Hermes tool client."""
-
-    def call(self, tool_name: str, **kwargs: Any) -> Any:  # noqa: ANN401
-        """Invoke a Hermes tool by name with keyword arguments.
-
-        Args:
-            tool_name: The Hermes tool identifier.
-            **kwargs: Tool-specific arguments.
-
-        Returns:
-            The tool's response payload.
-        """
-        ...
-
-
 class HermesKanbanBoard:
     """KanbanBoard adapter that delegates to the Hermes tool surface.
 
@@ -62,7 +47,7 @@ class HermesKanbanBoard:
         _client: The Hermes tool client.
     """
 
-    def __init__(self, tool_client: _ToolClient) -> None:
+    def __init__(self, tool_client: HermesToolClient) -> None:
         """Initialise with a Hermes tool client.
 
         Args:

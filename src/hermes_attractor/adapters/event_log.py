@@ -16,13 +16,15 @@ See: specs/001-attractor-kanban/contracts/ports.md §EventLog
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, cast
 
 from hermes_attractor.domain.card import CardResult
 from hermes_attractor.domain.constants import EVENT_LOG_BATCH_SIZE
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from hermes_attractor.ports.hermes_tool_client import HermesToolClient
 
 __all__ = ["EVENT_LOG_BATCH_SIZE", "HermesEventLog"]
 
@@ -43,22 +45,6 @@ _FIELD_SUMMARY = "summary"
 _FIELD_METADATA = "metadata"
 
 
-class _ToolClient(Protocol):  # pragma: no cover
-    """Minimal interface for a Hermes tool client."""
-
-    def call(self, tool_name: str, **kwargs: Any) -> Any:  # noqa: ANN401
-        """Invoke a Hermes tool by name.
-
-        Args:
-            tool_name: The Hermes tool identifier.
-            **kwargs: Tool-specific arguments.
-
-        Returns:
-            The tool's response payload.
-        """
-        ...
-
-
 class HermesEventLog:
     """EventLog adapter backed by the Hermes ``read_task_events`` tool.
 
@@ -69,7 +55,7 @@ class HermesEventLog:
         _client: The Hermes tool client.
     """
 
-    def __init__(self, tool_client: _ToolClient) -> None:
+    def __init__(self, tool_client: HermesToolClient) -> None:
         """Initialise with a Hermes tool client.
 
         Args:
