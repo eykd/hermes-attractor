@@ -1,7 +1,14 @@
 """HermesEventLog adapter: reads terminal events from the Hermes task_events log.
 
-Batches reads in groups of ``EVENT_LOG_BATCH_SIZE`` (from domain constants)
-to bound memory and replay duration (plan.md §Performance §Batch-boundary correctness).
+Batches reads in groups of ``EVENT_LOG_BATCH_SIZE`` (from domain constants) to bound
+memory and replay duration (plan.md §Performance §Batch-boundary correctness).
+
+Note on batch size: ``EVENT_LOG_BATCH_SIZE`` is a **throughput knob only**. The
+reconciler's correctness does not depend on it — every event at or below the final
+cursor is guaranteed to be processed regardless of how many batches it takes.
+Fan-in aggregation state is stored as durable ``RunNode`` records (not derived by
+re-reading events), so partial batches never leave the state machine in an
+inconsistent position.
 
 See: specs/001-attractor-kanban/contracts/ports.md §EventLog
 """
