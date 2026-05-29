@@ -33,6 +33,8 @@ from hermes_attractor.use_cases.run_execution import (
     _card_kind_for_node,  # pyright: ignore[reportPrivateUsage]
     advance_on_completion,
     launch_run,
+    query_run_result,
+    query_run_status,
 )
 
 pytestmark = pytest.mark.unit
@@ -1240,3 +1242,107 @@ def test_advance_goal_gate_exhausted_blocks_run() -> None:
     saved_run: Run = run_state.save_run.call_args[0][0]
     assert saved_run.status is RunStatus.BLOCKED
     kanban.create_card.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# query_run_status
+# ---------------------------------------------------------------------------
+
+
+def test_query_run_status_returns_status_current_nodes_and_context_keys() -> None:
+    """query_run_status returns run status, active node ids, and context keys."""
+    run = _make_run()
+    dispatched_node = RunNode(
+        run_id="run1",
+        node_id="work",
+        task_id="task-work",
+        status=NodeRunStatus.DISPATCHED,
+        attempt=1,
+        parent_node_ids=["start"],
+    )
+    succeeded_node = RunNode(
+        run_id="run1",
+        node_id="start",
+        task_id="task-start",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=1,
+        parent_node_ids=[],
+    )
+
+    run_state = MagicMock()
+    run_state.get_run.return_value = run
+    run_state.nodes_for_run.return_value = [dispatched_node, succeeded_node]
+
+    result = query_run_status(run_id="run1", run_state=run_state)
+
+    assert result["run_id"] == "run1"
+    assert result["status"] == "RUNNING"
+    assert result["current_nodes"] == ["work"]
+    context_keys = result["context_keys"]
+    assert isinstance(context_keys, list)
+    assert "task" in context_keys
+
+
+def test_query_run_status_running_node_is_included_in_current_nodes() -> None:
+    """query_run_status includes RUNNING status nodes as current nodes."""
+    run = _make_run()
+    running_node = RunNode(
+        run_id="run1",
+        node_id="step2",
+        task_id="task-step2",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=["start"],
+    )
+
+    run_state = MagicMock()
+    run_state.get_run.return_value = run
+    run_state.nodes_for_run.return_value = [running_node]
+
+    result = query_run_status(run_id="run1", run_state=run_state)
+
+    assert result["current_nodes"] == ["step2"]
+
+
+def test_query_run_status_raises_key_error_when_run_not_found() -> None:
+    """query_run_status raises KeyError when the run_id does not exist."""
+    run_state = MagicMock()
+    run_state.get_run.return_value = None
+
+    with pytest.raises(KeyError, match="run-missing"):
+        _ = query_run_status(run_id="run-missing", run_state=run_state)
+
+
+# ---------------------------------------------------------------------------
+# query_run_result
+# ---------------------------------------------------------------------------
+
+
+def test_query_run_result_returns_status_and_outcome() -> None:
+    """query_run_result returns run status and the full context data as outcome."""
+    run = Run(
+        run_id="run1",
+        spec_id="spec-a",
+        status=RunStatus.SUCCEEDED,
+        context=Context(data={"output": "final-answer"}),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+    run_state = MagicMock()
+    run_state.get_run.return_value = run
+
+    result = query_run_result(run_id="run1", run_state=run_state)
+
+    assert result["run_id"] == "run1"
+    assert result["status"] == "SUCCEEDED"
+    assert result["outcome"] == {"output": "final-answer"}
+
+
+def test_query_run_result_raises_key_error_when_run_not_found() -> None:
+    """query_run_result raises KeyError when the run_id does not exist."""
+    run_state = MagicMock()
+    run_state.get_run.return_value = None
+
+    with pytest.raises(KeyError, match="run-gone"):
+        _ = query_run_result(run_id="run-gone", run_state=run_state)

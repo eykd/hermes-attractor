@@ -114,6 +114,66 @@ def _gate_verdict_pass(metadata: Mapping[str, object]) -> bool:
     return isinstance(gate, str) and gate.lower() == _GATE_PASS_VALUE
 
 
+def query_run_status(*, run_id: str, run_state: RunStateStore) -> dict[str, object]:
+    """Query the current status of a pipeline run.
+
+    Returns a summary dict with the run status, the node_ids of nodes that are
+    currently RUNNING or DISPATCHED, and the keys present in the run context.
+
+    Args:
+        run_id: The unique identifier for the run.
+        run_state: The RunStateStore port for reading run and node state.
+
+    Returns:
+        A dict with ``run_id`` (str), ``status`` (str), ``current_nodes``
+        (list[str]), and ``context_keys`` (list[str]) keys.
+
+    Raises:
+        KeyError: If no run with ``run_id`` exists.
+    """
+    run = run_state.get_run(run_id)
+    if run is None:
+        msg = f"No run found with run_id={run_id!r}"
+        raise KeyError(msg)
+    nodes = run_state.nodes_for_run(run_id)
+    current_nodes = [n.node_id for n in nodes if n.status.value in ("RUNNING", "DISPATCHED")]
+    context_keys = list(run.context.data.keys())
+    return {
+        "run_id": run_id,
+        "status": run.status.value,
+        "current_nodes": current_nodes,
+        "context_keys": context_keys,
+    }
+
+
+def query_run_result(*, run_id: str, run_state: RunStateStore) -> dict[str, object]:
+    """Retrieve the outcome of a completed pipeline run.
+
+    Returns a summary dict with the run status and the full context data,
+    which represents the run's accumulated output.
+
+    Args:
+        run_id: The unique identifier for the run.
+        run_state: The RunStateStore port for reading run state.
+
+    Returns:
+        A dict with ``run_id`` (str), ``status`` (str), and ``outcome``
+        (dict[str, object]) keys.
+
+    Raises:
+        KeyError: If no run with ``run_id`` exists.
+    """
+    run = run_state.get_run(run_id)
+    if run is None:
+        msg = f"No run found with run_id={run_id!r}"
+        raise KeyError(msg)
+    return {
+        "run_id": run_id,
+        "status": run.status.value,
+        "outcome": dict(run.context.data),
+    }
+
+
 def launch_run(  # noqa: PLR0913
     *,
     spec_id: str,

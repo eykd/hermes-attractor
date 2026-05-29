@@ -32,7 +32,7 @@ from hermes_attractor.use_cases.authoring import (
 )
 from hermes_attractor.use_cases.echo import echo
 from hermes_attractor.use_cases.health import check_health
-from hermes_attractor.use_cases.run_execution import launch_run
+from hermes_attractor.use_cases.run_execution import launch_run, query_run_result, query_run_status
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -403,25 +403,10 @@ def handle_attractor_status(
 
     def _produce() -> dict[str, object]:
         run_id = str(args["run_id"])
-
         _run_state = (
             run_state if run_state is not None else SqliteRunStateStore(db_path=Path.cwd() / "attractor_runs.db")
         )
-        run = _run_state.get_run(run_id)
-        if run is None:
-            msg = f"No run found with run_id={run_id!r}"
-            raise KeyError(msg)
-
-        nodes = _run_state.nodes_for_run(run_id)
-        current_nodes = [n.node_id for n in nodes if n.status.value in ("RUNNING", "DISPATCHED")]
-        context_keys = list(run.context.data.keys())
-
-        return {
-            "run_id": run_id,
-            "status": run.status.value,
-            "current_nodes": current_nodes,
-            "context_keys": context_keys,
-        }
+        return query_run_status(run_id=run_id, run_state=_run_state)
 
     return _safe(_produce)
 
@@ -445,14 +430,6 @@ def handle_attractor_result(
         _run_state = (
             run_state if run_state is not None else SqliteRunStateStore(db_path=Path.cwd() / "attractor_runs.db")
         )
-        run = _run_state.get_run(run_id)
-        if run is None:
-            msg = f"No run found with run_id={run_id!r}"
-            raise KeyError(msg)
-        return {
-            "run_id": run_id,
-            "status": run.status.value,
-            "outcome": dict(run.context.data),
-        }
+        return query_run_result(run_id=run_id, run_state=_run_state)
 
     return _safe(_produce)
