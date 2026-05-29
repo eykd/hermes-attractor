@@ -6,11 +6,14 @@ Tests fail until ports/pipeline_store.py and adapters/pipeline_store.py are impl
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path  # noqa: TC003  # used in function signatures at runtime
+from pathlib import Path
 
 import pytest
 
-from hermes_attractor.adapters.pipeline_store import GitPipelineStore
+from hermes_attractor.adapters.pipeline_store import (
+    GitPipelineStore,
+    _validate_spec_id,  # pyright: ignore[reportPrivateUsage]
+)
 from hermes_attractor.domain.exceptions import PipelineValidationError
 from hermes_attractor.ports.pipeline_store import PipelineStore
 
@@ -119,3 +122,36 @@ def test_git_pipeline_store_raises_on_load_missing_file(tmp_path: Path) -> None:
     store.ensure_repo()
     with pytest.raises(PipelineValidationError):
         _ = store.load("another_nonexistent")
+
+
+def test_validate_spec_id_rejects_sibling_dir_prefix_bypass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Path confinement uses is_relative_to, not startswith, so a sibling like /repo-evil is rejected.
+
+    Regression test for the prefix-match weakness: str('/repo-evil').startswith(str('/repo'))
+    would have incorrectly returned True and allowed escape to a sibling directory.
+    is_relative_to('/repo-evil', '/repo') correctly returns False.
+    """
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+
+    # Simulate a symlink-escape scenario where resolve() returns a path outside repo_root
+    # but which *is* a string-prefix match for repo_root (the classic bug).
+    # We achieve this by monkeypatching Path.resolve so the resolved path lands
+    # in a sibling directory named with a shared prefix (e.g. "repo-evil").
+    sibling = tmp_path / "repo-evil"
+    sibling.mkdir()
+    evil_dot = sibling / "mypipeline.dot"
+
+    original_resolve = Path.resolve
+
+    def _patched_resolve(self: Path, **kwargs: object) -> Path:
+        """Return the evil sibling path for the target file, real path otherwise."""
+        result: Path = original_resolve(self, **kwargs)  # type: ignore[call-arg]
+        if self.name == "mypipeline.dot":
+            return evil_dot
+        return result
+
+    monkeypatch.setattr(Path, "resolve", _patched_resolve)
+
+    with pytest.raises(PipelineValidationError, match="Path confinement violation"):
+        _ = _validate_spec_id("mypipeline", repo_root)

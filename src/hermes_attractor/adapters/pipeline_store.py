@@ -72,7 +72,7 @@ def _validate_spec_id(spec_id: str, repo_root: Path) -> Path:
         )
     resolved = (repo_root / f"{spec_id}.dot").resolve()
     repo_root_resolved = repo_root.resolve()
-    if not str(resolved).startswith(str(repo_root_resolved)):  # pragma: no cover  # defense against symlink escape
+    if not resolved.is_relative_to(repo_root_resolved):  # defense against symlink escape / prefix-match bypass
         msg = f"Resolved path {resolved} is outside repo_root {repo_root_resolved}"
         raise PipelineValidationError(
             issues=[ValidationIssue(element_id="spec_id", reason=msg)],
