@@ -20,7 +20,7 @@
 
 Teams building multi-stage AI/agent pipelines need to **declare** a workflow as a graph
 (rather than write imperative glue code), **run** it durably (surviving crashes and
-restarts), and **choose who does the work per stage** (a cheap, fast agent profile for
+restarts), and **choose who does the work per node** (a cheap, fast agent profile for
 routing; a strong profile for hard work). StrongDM's *Attractor* defines exactly this — a
 directed graph of nodes, traversed by a deterministic engine that invokes agentic work at
 each node — but ships only a specification.
@@ -49,7 +49,7 @@ workflow uses today.
 ### Primary User Story
 
 A developer, working through a Hermes agent, asks the agent to build a pipeline. The agent
-uses authoring tools to add nodes (each a stage of work), connect them with edges (some
+uses authoring tools to add nodes (each representing a unit of work), connect them with edges (some
 conditional, some weighted), assign a profile to each work node (directly or via a
 stylesheet), and mark exit-blocking goal gates. The agent validates the pipeline, sees a
 readable summary of its structure, and the definition is saved as a versioned `.dot` file.
@@ -81,7 +81,7 @@ retrieve the final outcome.
    target rather than exiting, and exits only once the gated node reaches success or
    partial success.
 7. **Given** a pipeline containing a tool node, **When** traversal reaches it, **Then** the
-   deterministic tool work runs as a graph stage and its result updates the shared context.
+   deterministic tool work runs as a pipeline node and its result updates the shared context.
 8. **Given** the self-hosting reference pipeline (the `sp` workflow as a graph), **When** it
    runs end-to-end, **Then** it produces the expected per-phase outputs, routes review
    lenses in parallel, pauses at approval gates, and exits only when its review goal gates
@@ -139,7 +139,7 @@ retrieve the final outcome.
 - **FR-010**: Parallel fan-out/fan-in MUST run independent branches concurrently, cloning
   context into each branch and merging branch results by a defined, documented rule.
 - **FR-011**: Conditional nodes MUST route based on guards evaluated against the context.
-- **FR-012**: Tool nodes MUST invoke deterministic (non-agent) work as a graph stage and
+- **FR-012**: Tool nodes MUST invoke deterministic (non-agent) work as a pipeline node and
   feed its result into the context.
 - **FR-013**: Human-in-the-loop nodes MUST pause the run for human input and resume when the
   input is supplied.
