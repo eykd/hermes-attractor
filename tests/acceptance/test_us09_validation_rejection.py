@@ -218,11 +218,10 @@ def test_pipeline_validate_reports_unresolvable_profile() -> None:
 
 
 def test_attractor_run_with_no_start_pipeline_creates_no_card() -> None:
-    """attractor_run with a pipeline that has no START node creates no kanban card.
+    """attractor_run with a pipeline that has no START node is rejected by validation.
 
-    The current implementation creates a run but dispatches no first card
-    because there's no START node from which to find an entry.
-    Pre-run validation enforcement is a future enhancement.
+    The implementation validates the pipeline before creating a run and rejects
+    any pipeline missing a START node, returning ok=False with a PipelineValidationError.
     """
     dot = _make_no_start_dot()
     pipeline = PydotSerializer().parse(dot)
@@ -248,6 +247,5 @@ def test_attractor_run_with_no_start_pipeline_creates_no_card() -> None:
     )
 
     result = json.loads(raw)
-    if result.get("ok") is True:
-        # No kanban card should be created (no START node to dispatch from).
-        kanban.create_card.assert_not_called()
+    assert result["ok"] is False
+    assert result["error"] == "PipelineValidationError"
