@@ -91,6 +91,7 @@ runs/
 
 # Transient orchestration / runtime artifacts
 .sp-harden-findings.json
+.sp-harden-state.json
 attractor_runs.db
 attractor_runs.db-shm
 attractor_runs.db-wal
