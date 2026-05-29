@@ -1,0 +1,86 @@
+// sp workflow as an Attractor graph (US8 SC-006)
+// Encodes the spec-kit development workflow phases as a DAG.
+//
+// Phases:
+//   constitution (TOOL) -> brainstorm -> specify -> plan
+//   -> review_fan_out -> [red_team, analyze] -> review_fan_in
+//   -> tasks -> analyze_human (HUMAN approval gate)
+//   -> implement_fan_out -> [impl_wave_a, impl_wave_b] -> implement_fan_in
+//   -> harden_review (CODERGEN, retry_limit=3 marks it as gate-like) -> exit
+//
+// Profile assignments ensure per-node model routing.
+// Goal gate on harden_review routes back to implement_fan_out on fail.
+
+digraph "sp-workflow" {
+    // Entry
+    start [shape=Mdiamond]
+
+    // Phase 0: Constitution load (TOOL node)
+    constitution [shape=parallelogram profile="constitution-loader" prompt="load_constitution"]
+
+    // Phase 1: Brainstorm
+    brainstorm [shape=box profile="brainstorm-sonnet" prompt="Brainstorm solutions for: $feature"]
+
+    // Phase 2: Specify
+    specify [shape=box profile="specify-sonnet" prompt="Write a spec for: $feature"]
+
+    // Phase 3: Plan
+    plan [shape=box profile="plan-opus" prompt="Produce an implementation plan for: $feature"]
+
+    // Phase 4: Parallel review fan-out (red-team + analyze in parallel)
+    review_fan_out [shape=component profile="orchestrator"]
+
+    red_team [shape=box profile="security-reviewer-sonnet" prompt="Red-team the plan: $feature"]
+    analyze [shape=box profile="analyst-sonnet" prompt="Analyze feasibility: $feature"]
+
+    review_fan_in [shape=tripleoctagon profile="orchestrator"]
+
+    // Phase 5: Tasks generation
+    tasks [shape=box profile="tasks-sonnet" prompt="Break down implementation tasks: $feature"]
+
+    // Phase 6: Human approval gate (HUMAN node -- pauses run for human sign-off)
+    analyze_human [shape=hexagon profile="human" prompt="Please review and approve the plan for: $feature"]
+
+    // Phase 7: Parallel implementation fan-out (two implementation waves, <=16 each)
+    implement_fan_out [shape=component profile="orchestrator"]
+
+    impl_wave_a [shape=box profile="coder-gpt5" prompt="Implement wave A: $feature (batch 1)"]
+    impl_wave_b [shape=box profile="coder-gpt5" prompt="Implement wave B: $feature (batch 2)"]
+
+    implement_fan_in [shape=tripleoctagon profile="orchestrator"]
+
+    // Phase 8: Harden review (retry_limit=3 signals gate semantics; routes back on fail)
+    harden_review [shape=box profile="reviewer-opus" prompt="Review and harden implementation: $feature" retry_limit=3]
+
+    // Exit
+    exit [shape=Msquare]
+
+    // Edges
+    start -> constitution
+    constitution -> brainstorm
+    brainstorm -> specify
+    specify -> plan
+    plan -> review_fan_out
+
+    review_fan_out -> red_team
+    review_fan_out -> analyze
+
+    red_team -> review_fan_in
+    analyze -> review_fan_in
+
+    review_fan_in -> tasks
+    tasks -> analyze_human
+
+    analyze_human -> implement_fan_out
+
+    implement_fan_out -> impl_wave_a
+    implement_fan_out -> impl_wave_b
+
+    impl_wave_a -> implement_fan_in
+    impl_wave_b -> implement_fan_in
+
+    implement_fan_in -> harden_review
+
+    harden_review -> implement_fan_out [label="fail"]
+    harden_review -> exit [label="pass"]
+}
