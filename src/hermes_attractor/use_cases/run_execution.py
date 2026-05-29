@@ -313,6 +313,12 @@ def advance_on_completion(  # noqa: PLR0912, PLR0915, C901
     out_edges = [e for e in pipeline.edges if e.source_id == node_record.node_id]
     next_edge = select_edge(out_edges, context=dict(run.context.data), routing_hint=routing_hint, suggested_nodes=[])
     # When the next node is FAN_IN, only dispatch after all branches are done.
+    #
+    # BATCH-BOUNDARY SAFETY INVARIANT: each branch completion is a **durable write**
+    # (``upsert_node`` sets the branch RunNode to SUCCEEDED before we query the
+    # siblings). This means that even if a crash occurs mid-batch, re-processing
+    # the event will re-query the sibling statuses and reach the same conclusion —
+    # the FAN_IN check is idempotent and safe across reconciler batch boundaries.
     if next_edge:
         potential_fan_in = node_map.get(next_edge.target_id)
         if potential_fan_in is not None and potential_fan_in.shape is NodeShape.FAN_IN:
