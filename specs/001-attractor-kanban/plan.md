@@ -216,12 +216,34 @@ load-bearing and MUST be designed into the relevant ports/use cases, not bolted 
 - Edge `condition` and conditional-node guards are strings sourced from DOT (untrusted) and
   evaluated against the `Context` (worker-influenced). They MUST NOT be evaluated with
   `eval`/`exec`/`compile` or any Python execution path.
-- Define a **restricted, total guard mini-language** evaluated by a pure domain evaluator:
-  comparison + boolean ops over context keys and literals only (no attribute access, no
-  calls, no indexing into arbitrary objects, no imports). Unknown/undefined keys evaluate to
-  a defined falsy result, never an exception that escapes the domain.
-- The guard evaluator is a pure, total domain function (replay-safe like `EdgeSelector`); an
-  unparseable guard is a **validation error** (FR-004), not a runtime surprise.
+- The **guard mini-language** is a restricted, total, purely-domain expression language.
+  Concrete grammar (EBNF notation):
+  ```
+  expr     ::= or_expr
+  or_expr  ::= and_expr ( "or" and_expr )*
+  and_expr ::= not_expr ( "and" not_expr )*
+  not_expr ::= "not" not_expr | atom
+  atom     ::= "(" expr ")" | comparison
+  comparison ::= operand ( cmp_op operand )?
+  operand  ::= KEY | STRING | NUMBER | BOOL | NULL
+  cmp_op   ::= "==" | "!=" | "<" | "<=" | ">" | ">="
+  KEY      ::= [A-Za-z_][A-Za-z0-9_.]*  (max 64 chars; dot for nested key path)
+  STRING   ::= quoted string literal (single or double quotes, no embedded newlines)
+  NUMBER   ::= integer or decimal literal
+  BOOL     ::= "true" | "false"
+  NULL     ::= "null"
+  ```
+  Supported semantics: bare `KEY` evaluates to truthy/falsy based on the context value at
+  that key path (missing key = falsy, never an error). Nested key paths use dot notation
+  up to 4 levels deep (`a.b.c.d`). Comparison is type-aware but never raises on type
+  mismatch — a type mismatch returns `false`. Size cap: guard expression strings are
+  rejected at validation if longer than 512 characters.
+- No attribute access, no method calls, no indexing into arbitrary objects, no imports, no
+  string operations — the grammar is the complete allowlist.
+- The guard evaluator is implemented as a recursive-descent parser + evaluator in
+  `domain/guard.py` — a pure, total domain function (replay-safe like `EdgeSelector`). An
+  unparseable guard or a guard exceeding the size cap is a **validation error** (FR-004),
+  not a runtime surprise.
 
 ### Prompt / `$var` expansion (FR-022) — template, not interpolation
 
@@ -230,9 +252,12 @@ load-bearing and MUST be designed into the relevant ports/use cases, not bolted 
   a downstream worker). Expansion MUST be a literal, non-recursive substitution of known
   `$var` placeholders only — never a templating engine that evaluates expressions, and never
   re-expanded on the substituted result.
-- Undefined placeholders are surfaced as a structured authoring/validation issue or
-  rendered as an explicit empty/marker token; they never leak the raw context object or
-  adjacent keys.
+- Undefined placeholders are surfaced as a structured authoring/validation issue. At
+  runtime (if a card body is expanded against an incomplete context), undefined `$var`
+  references are replaced with the literal string `__UNDEFINED_VAR_<name>__` so the
+  downstream worker can see an explicit marker rather than a silently-empty or missing
+  value. The marker format makes it searchable in logs and is never mistakable for a valid
+  context value. They never leak the raw context object or adjacent keys.
 
 ### Path / repo handling (FR-003) — `spec_id` and `repo_path` are untrusted
 
@@ -281,7 +306,10 @@ load-bearing and MUST be designed into the relevant ports/use cases, not bolted 
 
 - DOT parsing (`DotSerializer.parse`) on untrusted input MUST enforce input-size and
   node/edge-count caps and reject pathological graphs before constructing a `Pipeline`,
-  preventing memory/CPU exhaustion at the authoring entry point.
+  preventing memory/CPU exhaustion at the authoring entry point. Concrete limits: raw DOT
+  input size capped at **1 MiB** (1,048,576 bytes); parsed graph must have no more than
+  **256 nodes** and **1,024 edges**. Exceeding any cap raises `PipelineValidationError`
+  with a structured issue naming the exceeded limit — never a parser crash or OOM.
 
 ## Edge Cases & Error Handling
 
@@ -305,10 +333,11 @@ Added by red-team Pass 1.
 
 - The plugin-owned DB is written by many worker processes (each fires the hook) plus the
   reconcile session. Default SQLite locking yields `database is locked` errors under
-  contention. The SQLite adapter MUST enable WAL mode and a `busy_timeout`, wrap each
-  advancement in a single transaction, and surface lock contention as a retryable safe
-  failure (handed to the reconciler) rather than a raised exception crossing the plugin
-  boundary.
+  contention. The SQLite adapter MUST enable WAL mode (`PRAGMA journal_mode=WAL`) and set
+  `busy_timeout` to **5,000 ms** (5 seconds) via `PRAGMA busy_timeout=5000`, wrap each
+  advancement in a single transaction, and surface lock contention (still locked after
+  timeout) as a retryable safe failure (handed to the reconciler) rather than a raised
+  exception crossing the plugin boundary.
 
 ### Partial failure between card creation and state persistence
 
@@ -342,14 +371,19 @@ Added by red-team Pass 1.
 
 - Parallel fan-out (FR-010) creates N sibling cards from a single node; N is currently
   unbounded and, for a pipeline authored from untrusted DOT, is a board-exhaustion vector.
-  Enforce a configurable maximum fan-out width at validation (FR-004) and at runtime; exceed
-  -> validation error / blocked run with a reported reason rather than flooding the board.
+  Enforce a maximum fan-out width of **16 parallel branches** at validation (FR-004) and at
+  runtime. This limit is a named constant `MAX_FAN_OUT_WIDTH = 16` in `domain/constants.py`
+  (not a runtime-configurable setting — it is a safety invariant, not an operational tuning
+  knob). Exceeding it yields a `PipelineValidationError` at authoring time and a blocked run
+  with a structured reason at runtime rather than flooding the board.
 
 ### Bounded event-log replay
 
 - `EventLog.read_since(last_seen_event_id)` after a long outage can return a large slice of
-  `task_events`. Read in bounded batches, advancing and persisting the cursor per batch, so a
-  far-behind reconcile makes monotonic progress without loading the whole log into memory.
+  `task_events`. Read in bounded batches of **100 events per batch**, advancing and
+  persisting the cursor after each batch, so a far-behind reconcile makes monotonic progress
+  without loading the whole log into memory. The batch size is a named constant
+  `EVENT_LOG_BATCH_SIZE = 100` in `domain/constants.py`.
 
 ### Run-state query shape
 
