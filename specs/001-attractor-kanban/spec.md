@@ -4,6 +4,7 @@
 **Created**: 2026-05-28
 **Status**: Draft
 **Brainstorm**: specs/brainstorms/2026-05-28-attractor-hermes-temporal-requirements.md
+**Research**: specs/001-attractor-kanban/research-hermes-kanban.md (grounded Hermes Kanban findings)
 **Beads Epic**: `hermes-attractor-zym`
 
 **Beads Phase Tasks**:
@@ -157,6 +158,10 @@ retrieve the final outcome.
   resume correctly when a human supplies input (no polling by the user, no lost state).
 - **FR-018**: The agent MUST be able to launch a run, query its status, and retrieve its
   result/outcome.
+- **FR-024**: Run advancement MUST be idempotent and replayable: re-processing a completion
+  event (after a restart or duplicate delivery) MUST NOT create duplicate work or double-
+  advance a run. Follow-up cards MUST be created with deterministic idempotency keys, and the
+  engine MUST persist a durable cursor over the kanban event log so it can resume exactly.
 
 **Profile & Model Selection**
 
@@ -287,17 +292,24 @@ retrieve the final outcome.
 
 ## Assumptions
 
-- **The plugin can advance a run in response to kanban card completion** (via a Hermes hook,
-  the kanban event stream, or equivalent) and persist/reload run state across gateway
-  restarts. This is load-bearing for FR-014/FR-017 and must be confirmed in planning.
-  *(Deferred to planning.)*
-- **A Hermes profile can be bound to a specific model/provider**, so that naming a profile
-  per node achieves per-node model selection. Documentation is ambiguous on whether profiles
-  carry their own model today; verify in planning and, if needed, identify the configuration
-  path. *(Deferred to planning — could affect FR-019.)*
-- **Goal-gate loops and conditional re-routing are realized by dynamic card creation**, since
-  the kanban dependency graph is otherwise acyclic; the traversal engine unrolls iterations
-  as new cards. *(Deferred to planning.)*
+The first three items were **resolved by source verification on 2026-05-28** — see
+[research-hermes-kanban.md](./research-hermes-kanban.md) for evidence and the resulting
+design. They are recorded here as grounded constraints, not open questions.
+
+- **RESOLVED — Run advancement.** The plugin advances a run by reacting to kanban task
+  completion: primarily via a `post_tool_call` hook firing in the worker process after
+  `kanban_complete`, with a registered reconcile command that replays the durable
+  `task_events` log (`id > last_seen_event_id`) to recover missed advancements. There is no
+  built-in kanban plugin hook and no plugin-run daemon, so the engine owns its own durable
+  state DB and treats advancement as replayable. (Load-bearing for FR-014/FR-017/FR-024.)
+- **RESOLVED — Per-node model.** A Hermes profile carries its own `model.default` in its
+  `config.yaml`, and the dispatcher spawns each card's worker as the assigned profile. So
+  per-node model selection = per-node profile selection (FR-019/FR-020). Per-*task* model
+  override exists internally (`tasks.model_override` + dispatcher `-m`) but is not on the
+  public create surface, so it is a roadmap item, not a v1 dependency.
+- **RESOLVED — Goal-gate loops.** Loops/conditional re-routing are realized by dynamic card
+  creation: each attempt is a new acyclic DAG segment (new task ids), never a cyclic kanban
+  link. The plugin owns loop state; idempotency keys keep it replay-safe (FR-009/FR-024).
 - The Hermes gateway (with its kanban dispatcher) is running while pipelines execute; `ready`
   cards do not progress without it.
 - The real plugin entry-point group is `hermes_agent.plugins` (research finding); the repo's
