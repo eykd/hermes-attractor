@@ -73,7 +73,7 @@ def _make_fake_kanban() -> tuple[MagicMock, list[str], list[str]]:
 
     def _create_card(card: object) -> str:
         """Record idempotency key and return a task id (or existing id on dedup)."""
-        key = str(card.idempotency_key.value)  # type: ignore[union-attr]
+        key = str(card.idempotency_key.value)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
         if key in created_idempotency_keys:
             idx = created_idempotency_keys.index(key)
             return created_task_ids[idx]
@@ -188,7 +188,7 @@ def test_reconcile_resumes_run_without_re_executing_completed_nodes() -> None:
 
     def _create_card(card: object) -> str:
         """Dedup-aware create_card."""
-        key = str(card.idempotency_key.value)  # type: ignore[union-attr]
+        key = str(card.idempotency_key.value)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
         if key in created_idempotency_keys:
             idx = created_idempotency_keys.index(key)
             return created_task_ids[idx]
@@ -276,7 +276,7 @@ def test_reconcile_is_idempotent_when_called_multiple_times() -> None:
 
     def _create_card_idempotent(card: object) -> str:
         """Dedup-aware create_card for idempotency test."""
-        key = str(card.idempotency_key.value)  # type: ignore[union-attr]
+        key = str(card.idempotency_key.value)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
         if key in created_idempotency_keys:
             idx = created_idempotency_keys.index(key)
             if idx < len(created_task_ids):

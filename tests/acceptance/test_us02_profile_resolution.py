@@ -46,7 +46,7 @@ def _ok(response: str) -> dict[str, object]:
     assert data.get("ok") is True, f"Expected ok:true, got: {data}"
     result = data.get("result", {})
     assert isinstance(result, dict)
-    return result  # type: ignore[return-value]
+    return result  # pyright: ignore[reportUnknownVariableType]
 
 
 def _make_profile_test_pipeline() -> Pipeline:
@@ -114,7 +114,7 @@ def test_per_node_profile_override_takes_precedence() -> None:  # noqa: PLR0915
 
     def _create_run(run: object) -> None:
         """Store the run."""
-        runs[run.run_id] = run  # type: ignore[union-attr]
+        runs[run.run_id] = run  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
 
     def _get_run(run_id: str) -> object:
         """Return the stored run."""
@@ -126,7 +126,7 @@ def test_per_node_profile_override_takes_precedence() -> None:  # noqa: PLR0915
 
     def _nodes_for_run(run_id: str) -> list[object]:
         """Return all nodes for the run."""
-        return [n for n in nodes if n.run_id == run_id]  # type: ignore[union-attr]
+        return [n for n in nodes if n.run_id == run_id]  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
 
     run_state = MagicMock()
     run_state.create_run.side_effect = _create_run
@@ -162,8 +162,8 @@ def test_per_node_profile_override_takes_precedence() -> None:  # noqa: PLR0915
     # The first card should have been created for 'default_node' with the stylesheet default.
     assert len(created_cards) == 1
     first_card = created_cards[0]
-    assert first_card.assignee_profile == "default-profile"  # type: ignore[union-attr]
-    assert first_card.kind is CardKind.WORK  # type: ignore[union-attr]
+    assert first_card.assignee_profile == "default-profile"  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+    assert first_card.kind is CardKind.WORK  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
 
     # Query status.
     status_result = _ok(handle_attractor_status({"run_id": run_id}, run_state=run_state))
@@ -177,14 +177,14 @@ def test_per_node_profile_override_takes_precedence() -> None:  # noqa: PLR0915
     # We verify by simulating the second advance: complete default_node -> creates override_node card.
     # The RunNode for default_node should be in our fake store.
     default_node_record = next(
-        (n for n in nodes if n.node_id == "default_node"),  # type: ignore[union-attr]
+        (n for n in nodes if n.node_id == "default_node"),  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
         None,
     )
     assert default_node_record is not None, "Expected default_node in run state"
 
     # Simulate completion of default_node.
     card_result = CardResult(
-        task_id=default_node_record.task_id,  # type: ignore[union-attr]
+        task_id=default_node_record.task_id,  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
         event_id=1,
         event_kind="completed",
         summary="Default work done.",
@@ -206,5 +206,5 @@ def test_per_node_profile_override_takes_precedence() -> None:  # noqa: PLR0915
     assert len(created_cards) == 2
     override_card = created_cards[1]
     # Per-node override takes precedence: override_node should get "override-profile".
-    assert override_card.assignee_profile == "override-profile"  # type: ignore[union-attr]
-    assert override_card.assignee_profile != "default-profile"  # type: ignore[union-attr]
+    assert override_card.assignee_profile == "override-profile"  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+    assert override_card.assignee_profile != "default-profile"  # pyright: ignore[reportAttributeAccessIssue]

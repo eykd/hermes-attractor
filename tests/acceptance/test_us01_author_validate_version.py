@@ -56,7 +56,7 @@ def _ok(response: str) -> dict[str, object]:
     assert data.get("ok") is True, f"Expected ok:true, got: {data}"
     result = data.get("result", {})
     assert isinstance(result, dict)
-    return result  # type: ignore[return-value]  # dict[str, object] is compatible
+    return result  # pyright: ignore[reportUnknownVariableType]  # dict[str, object] is compatible
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +232,7 @@ def test_validate_rejects_pipeline_with_no_start_node(tmp_path: Path, monkeypatc
     validate_result = _ok(handle_attractor_validate({"spec_id": spec_id, "repo_path": repo}))
 
     assert validate_result.get("valid") is False, f"Expected valid:false, got: {validate_result}"
-    issues: list[dict[str, object]] = validate_result.get("issues", [])  # type: ignore[assignment]
+    issues: list[dict[str, object]] = validate_result.get("issues", [])  # pyright: ignore[reportAssignmentType]
     assert issues, "Expected at least one validation issue"
     assert any("element_id" in issue and "reason" in issue for issue in issues), (
         f"Issues should have element_id and reason fields: {issues}"
@@ -269,7 +269,7 @@ def test_validate_rejects_pipeline_with_dangling_edge(tmp_path: Path, monkeypatc
     validate_result = _ok(handle_attractor_validate({"spec_id": spec_id, "repo_path": repo}))
 
     assert validate_result.get("valid") is False, f"Expected valid:false, got: {validate_result}"
-    issues: list[dict[str, object]] = validate_result.get("issues", [])  # type: ignore[assignment]
+    issues: list[dict[str, object]] = validate_result.get("issues", [])  # pyright: ignore[reportAssignmentType]
     assert issues, "Expected at least one validation issue for the dangling edge"
     issue_texts = " ".join(str(issue) for issue in issues)
     assert "ghost_node" in issue_texts, f"Expected 'ghost_node' in issue references: {issues}"
@@ -319,7 +319,7 @@ def test_validate_rejects_pipeline_with_unknown_profile(tmp_path: Path, monkeypa
     validate_result = _ok(handle_attractor_validate({"spec_id": spec_id, "repo_path": repo}))
 
     assert validate_result.get("valid") is False, f"Expected valid:false, got: {validate_result}"
-    issues: list[dict[str, object]] = validate_result.get("issues", [])  # type: ignore[assignment]
+    issues: list[dict[str, object]] = validate_result.get("issues", [])  # pyright: ignore[reportAssignmentType]
     assert issues, "Expected at least one validation issue for missing profile"
     issue_texts = " ".join(str(issue) for issue in issues)
     assert "work" in issue_texts, f"Expected node 'work' in issues: {issues}"

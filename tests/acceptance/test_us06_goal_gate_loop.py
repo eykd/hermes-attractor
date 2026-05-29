@@ -155,7 +155,7 @@ def test_gate_fail_routes_to_retry_target() -> None:
     assert created_cards, "Expected a retry card to be created after gate fail"
     retry_card = created_cards[0]
     # The idempotency key should reference "work" node with attempt:2.
-    key_value = retry_card.idempotency_key.value  # type: ignore[union-attr]
+    key_value = retry_card.idempotency_key.value  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
     assert "work" in key_value, f"Expected retry card at 'work' node, got key: {key_value}"
     assert "attempt:2" in key_value, f"Expected attempt:2 in idempotency key, got: {key_value}"
 

@@ -83,5 +83,5 @@ def test_in_memory_registry_run_unknown_tool_returns_safe_error() -> None:
     # Must not raise — returns an error Outcome.
     assert result is not None
     # The result should indicate failure, not success.
-    status = result.get("status") if isinstance(result, dict) else None  # type: ignore[union-attr]
+    status = result.get("status") if isinstance(result, dict) else None  # pyright: ignore[reportUnnecessaryIsInstance]
     assert status in ("ERROR", "FAIL", "UNKNOWN_TOOL"), f"Expected error status for unknown tool, got: {result}"

@@ -266,40 +266,40 @@ def test_sp_pipeline_runs_end_to_end_to_succeeded() -> None:  # noqa: PLR0915, C
 
     # Sequential phases.
     assert _dispatched_node("brainstorm") is not None, "brainstorm should be dispatched"
-    _advance(_dispatched_node("brainstorm").task_id)  # type: ignore[union-attr]
+    _advance(_dispatched_node("brainstorm").task_id)  # pyright: ignore[reportOptionalMemberAccess, reportArgumentType]
 
     assert _dispatched_node("specify") is not None
-    _advance(_dispatched_node("specify").task_id)  # type: ignore[union-attr]
+    _advance(_dispatched_node("specify").task_id)  # pyright: ignore[reportOptionalMemberAccess, reportArgumentType]
 
     assert _dispatched_node("plan") is not None
-    _advance(_dispatched_node("plan").task_id)  # type: ignore[union-attr]
+    _advance(_dispatched_node("plan").task_id)  # pyright: ignore[reportOptionalMemberAccess, reportArgumentType]
 
     # FAN_OUT dispatches fan_out card.
     fan_out_node = _dispatched_node("fan_out")
     assert fan_out_node is not None, "fan_out should be dispatched"
-    _advance(fan_out_node.task_id)  # type: ignore[union-attr]
+    _advance(fan_out_node.task_id)  # pyright: ignore[reportArgumentType]
 
     # After fan_out completes, red_team and analyze are dispatched.
     assert _dispatched_node("red_team") is not None
     assert _dispatched_node("analyze") is not None
 
     # Complete both branches.
-    _advance(_dispatched_node("red_team").task_id)  # type: ignore[union-attr]
-    _advance(_dispatched_node("analyze").task_id)  # type: ignore[union-attr]
+    _advance(_dispatched_node("red_team").task_id)  # pyright: ignore[reportOptionalMemberAccess, reportArgumentType]
+    _advance(_dispatched_node("analyze").task_id)  # pyright: ignore[reportOptionalMemberAccess, reportArgumentType]
 
     # FAN_IN dispatched after both branches complete.
     assert _dispatched_node("fan_in") is not None
-    _advance(_dispatched_node("fan_in").task_id)  # type: ignore[union-attr]
+    _advance(_dispatched_node("fan_in").task_id)  # pyright: ignore[reportOptionalMemberAccess, reportArgumentType]
 
     # implement dispatched.
     assert _dispatched_node("implement") is not None
-    _advance(_dispatched_node("implement").task_id)  # type: ignore[union-attr]
+    _advance(_dispatched_node("implement").task_id)  # pyright: ignore[reportOptionalMemberAccess, reportArgumentType]
 
     # gate_review dispatched (first attempt, fails).
     assert _dispatched_node("gate_review") is not None
     gate_node = _dispatched_node("gate_review")
     run_state.nodes_for_run.return_value = _nodes_for_run(run_id)
-    _advance(gate_node.task_id, gate_pass=False)  # type: ignore[union-attr]
+    _advance(gate_node.task_id, gate_pass=False)  # pyright: ignore[reportOptionalMemberAccess, reportArgumentType]
 
     # implement dispatched again (attempt 2).
     implement_nodes = [n for n in nodes if n.node_id == "implement"]
@@ -319,7 +319,7 @@ def test_sp_pipeline_runs_end_to_end_to_succeeded() -> None:  # noqa: PLR0915, C
     # human_approve dispatched (PAUSED_HUMAN).
     assert runs[run_id].status is RunStatus.PAUSED_HUMAN, f"Expected PAUSED_HUMAN, got {runs[run_id].status}"
     assert _dispatched_node("human_approve") is not None
-    _advance(_dispatched_node("human_approve").task_id)  # type: ignore[union-attr]
+    _advance(_dispatched_node("human_approve").task_id)  # pyright: ignore[reportOptionalMemberAccess, reportArgumentType]
 
     # version_check (TOOL) runs inline -> EXIT -> SUCCEEDED.
     assert runs[run_id].status is RunStatus.SUCCEEDED, f"Expected SUCCEEDED, got {runs[run_id].status}"

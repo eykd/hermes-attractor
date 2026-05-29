@@ -225,7 +225,7 @@ def test_validate_spec_id_rejects_sibling_dir_prefix_bypass(tmp_path: Path, monk
 
     def _patched_resolve(self: Path, **kwargs: object) -> Path:
         """Return the evil sibling path for the target file, real path otherwise."""
-        result: Path = original_resolve(self, **kwargs)  # type: ignore[call-arg]
+        result: Path = original_resolve(self, **kwargs)  # pyright: ignore[reportArgumentType]
         if self.name == "mypipeline.dot":
             return evil_dot
         return result

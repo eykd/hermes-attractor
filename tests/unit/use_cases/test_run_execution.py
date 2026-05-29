@@ -65,7 +65,7 @@ def _make_pipeline(
         Edge(source_id="work", target_id="exit"),
     ]
     stylesheet = Stylesheet(rules=[StyleRule(selector="*", profile="default")])
-    return Pipeline(  # type: ignore[return-value]
+    return Pipeline(  # pyright: ignore[reportReturnType]
         spec_id=spec_id,
         nodes=[start, work, exit_],
         edges=edges,
