@@ -144,6 +144,13 @@ def launch_run(  # noqa: PLR0913
     now = clock.now()
     dot = store.load(spec_id)
     pipeline: Pipeline = serializer.parse(dot)
+
+    # Validate the pipeline before creating a run (FR-004 / SC-007).
+    issues = pipeline.validate()
+    if issues:
+        msg = f"Pipeline '{spec_id}' is invalid: {len(issues)} issue(s)"
+        raise PipelineValidationError(issues=issues, message=msg)
+
     ctx = Context(data=initial_context)
     run_id = str(uuid.uuid4())
 
@@ -158,14 +165,17 @@ def launch_run(  # noqa: PLR0913
     run_state.create_run(run)
 
     # Find the first non-START node reachable from START.
+    # NOTE: pipeline.validate() above ensures exactly one START exists and no dangling
+    # edges, so the `if start_nodes:` and `if first_edge:` guards below are defensive
+    # only — they cannot fire after validation passes.
     node_map = {n.node_id: n for n in pipeline.nodes}
     start_nodes = [n for n in pipeline.nodes if n.shape is NodeShape.START]
-    if start_nodes:
+    if start_nodes:  # pragma: no branch  # validate() ensures START exists
         start_id = start_nodes[0].node_id
         # Get all edges from start; pick first target as entry node.
         start_edges = [e for e in pipeline.edges if e.source_id == start_id]
         first_edge = select_edge(start_edges, context=dict(ctx.data), routing_hint=None, suggested_nodes=[])
-        if first_edge:
+        if first_edge:  # pragma: no branch  # validate() ensures reachability
             entry_node = node_map.get(first_edge.target_id)
             if entry_node and entry_node.shape not in (NodeShape.START, NodeShape.EXIT):
                 profile = pipeline.resolve_profile(entry_node) or ""

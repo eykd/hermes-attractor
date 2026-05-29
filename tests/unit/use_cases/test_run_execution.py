@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from hermes_attractor.domain.card import CardKind, CardResult
+from hermes_attractor.domain.exceptions import PipelineValidationError
 from hermes_attractor.domain.pipeline import (
     Context,
     Edge,
@@ -418,8 +419,8 @@ def test_attractor_status_handler_returns_ok_json_with_status_and_nodes() -> Non
 # ---------------------------------------------------------------------------
 
 
-def test_launch_run_with_start_node_but_no_edges_still_returns_run_id() -> None:
-    """launch_run returns a run_id when the START node has no outgoing edges (degenerate case)."""
+def test_launch_run_with_start_node_but_no_edges_raises_validation_error() -> None:
+    """launch_run raises PipelineValidationError when the pipeline fails validation."""
     start = Node(node_id="start", shape=NodeShape.START)
     pipeline = Pipeline(
         spec_id="spec-no-edges",
@@ -436,18 +437,18 @@ def test_launch_run_with_start_node_but_no_edges_still_returns_run_id() -> None:
     store = MagicMock()
     store.load.return_value = "digraph spec-no-edges {}"
 
-    result = launch_run(
-        spec_id="spec-no-edges",
-        initial_context={},
-        kanban=kanban,
-        run_state=run_state,
-        serializer=serializer,
-        store=store,
-        clock=clock,
-    )
+    with pytest.raises(PipelineValidationError):
+        _ = launch_run(
+            spec_id="spec-no-edges",
+            initial_context={},
+            kanban=kanban,
+            run_state=run_state,
+            serializer=serializer,
+            store=store,
+            clock=clock,
+        )
 
-    assert result["run_id"]
-    kanban.create_card.assert_not_called()
+    run_state.create_run.assert_not_called()
 
 
 def test_launch_run_with_start_to_exit_edge_does_not_create_card() -> None:
@@ -483,8 +484,8 @@ def test_launch_run_with_start_to_exit_edge_does_not_create_card() -> None:
     kanban.create_card.assert_not_called()
 
 
-def test_launch_run_with_no_start_node_still_returns_run_id() -> None:
-    """launch_run returns a run_id even when the pipeline has no START node (degenerate case)."""
+def test_launch_run_with_no_start_node_raises_validation_error() -> None:
+    """launch_run raises PipelineValidationError when the pipeline has no START node."""
     # Build a pipeline with only EXIT — no START
     exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
     pipeline = Pipeline(
@@ -502,17 +503,18 @@ def test_launch_run_with_no_start_node_still_returns_run_id() -> None:
     store = MagicMock()
     store.load.return_value = "digraph spec-b {}"
 
-    result = launch_run(
-        spec_id="spec-b",
-        initial_context={},
-        kanban=kanban,
-        run_state=run_state,
-        serializer=serializer,
-        store=store,
-        clock=clock,
-    )
+    with pytest.raises(PipelineValidationError):
+        _ = launch_run(
+            spec_id="spec-b",
+            initial_context={},
+            kanban=kanban,
+            run_state=run_state,
+            serializer=serializer,
+            store=store,
+            clock=clock,
+        )
 
-    assert result["run_id"]
+    run_state.create_run.assert_not_called()
     # No card created because no START node
     kanban.create_card.assert_not_called()
 
