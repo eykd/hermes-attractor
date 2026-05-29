@@ -267,3 +267,38 @@ def handle_attractor_summary(args: dict[str, object]) -> str:
         return get_summary(spec_id=spec_id, store=store, serializer=serializer, renderer=renderer)
 
     return _safe(_produce)
+
+
+# ---------------------------------------------------------------------------
+# Execution tool stubs (M2 — run launch, status, and result not yet implemented).
+# ---------------------------------------------------------------------------
+
+
+def _not_implemented(tool_name: str) -> str:
+    """Return a standard not-implemented JSON error payload for stub handlers."""
+    msg = f"{tool_name!r} is not yet implemented (M2 run/kanban milestone pending)"
+    return json.dumps({"ok": False, "error": "NotImplementedError", "message": msg})
+
+
+def handle_attractor_run(args: dict[str, object]) -> str:
+    """Handle the ``attractor_run`` tool (STUB — M2 not yet implemented).
+
+    Expected inputs: spec_id (str), optional repo_path (str), optional context (dict).
+    """
+    return _not_implemented("attractor_run")
+
+
+def handle_attractor_status(args: dict[str, object]) -> str:
+    """Handle the ``attractor_status`` tool (STUB — M2 not yet implemented).
+
+    Expected inputs: run_id (str).
+    """
+    return _not_implemented("attractor_status")
+
+
+def handle_attractor_result(args: dict[str, object]) -> str:
+    """Handle the ``attractor_result`` tool (STUB — M2 not yet implemented).
+
+    Expected inputs: run_id (str).
+    """
+    return _not_implemented("attractor_result")

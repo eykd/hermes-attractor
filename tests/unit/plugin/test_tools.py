@@ -13,7 +13,10 @@ from hermes_attractor.plugin.tools import (
     handle_attractor_create_graph,
     handle_attractor_remove_edge,
     handle_attractor_remove_node,
+    handle_attractor_result,
+    handle_attractor_run,
     handle_attractor_set_stylesheet,
+    handle_attractor_status,
     handle_attractor_summary,
     handle_attractor_validate,
     handle_echo,
@@ -158,6 +161,24 @@ def test_handle_attractor_add_and_remove_edge_ok(tmp_path: Path) -> None:
         {"spec_id": "flow", "source_id": "start", "target_id": "exit", "repo_path": repo}
     )
     assert _assert_json_response(remove_resp)["ok"] is True
+
+
+def test_handle_attractor_run_never_raises() -> None:
+    """handle_attractor_run returns a JSON string and never raises (M2 stub)."""
+    response = handle_attractor_run({"spec_id": "x", "repo_path": "/nonexistent"})
+    _ = _assert_json_response(response)
+
+
+def test_handle_attractor_status_never_raises() -> None:
+    """handle_attractor_status returns a JSON string and never raises (M2 stub)."""
+    response = handle_attractor_status({"run_id": "some-run-id"})
+    _ = _assert_json_response(response)
+
+
+def test_handle_attractor_result_never_raises() -> None:
+    """handle_attractor_result returns a JSON string and never raises (M2 stub)."""
+    response = handle_attractor_result({"run_id": "some-run-id"})
+    _ = _assert_json_response(response)
 
 
 def test_handle_attractor_set_stylesheet_empty_rules_never_raises(tmp_path: Path) -> None:
