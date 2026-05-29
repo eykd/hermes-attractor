@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
     from hermes_attractor.ports.hermes_tool_client import HermesToolClient
 
-__all__ = ["EVENT_LOG_BATCH_SIZE", "HermesEventLog"]
+__all__ = ["HermesEventLog"]
 
 _log = logging.getLogger(__name__)
 

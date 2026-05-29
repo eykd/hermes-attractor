@@ -9,8 +9,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from hermes_attractor.adapters.event_log import EVENT_LOG_BATCH_SIZE, HermesEventLog
+from hermes_attractor.adapters.event_log import HermesEventLog
 from hermes_attractor.domain.card import CardResult
+from hermes_attractor.domain.constants import EVENT_LOG_BATCH_SIZE
 from hermes_attractor.ports.event_log import EventLog
 
 pytestmark = pytest.mark.unit
