@@ -758,6 +758,197 @@ def test_attractor_result_handler_returns_ok_json() -> None:
 
 
 # ---------------------------------------------------------------------------
+# TOOL node routing (coverage for edge cases)
+# ---------------------------------------------------------------------------
+
+
+def test_advance_tool_node_without_registry_saves_run_with_unchanged_context() -> None:
+    """TOOL node with no tool_registry saves run with unchanged context (no-op tool)."""
+    start = Node(node_id="start", shape=NodeShape.START)
+    tool_node = Node(node_id="tool_stage", shape=NodeShape.TOOL, profile="tool-runner", prompt="my_tool")
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    pipeline = Pipeline(
+        spec_id="tool-pipeline",
+        nodes=[start, tool_node, exit_],
+        edges=[
+            Edge(source_id="start", target_id="tool_stage"),
+            Edge(source_id="tool_stage", target_id="exit"),
+        ],
+        stylesheet=Stylesheet(rules=[StyleRule(selector="*", profile="default")]),
+    )
+    work_record = RunNode(
+        run_id="run1",
+        node_id="start",
+        task_id="task-start",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=[],
+    )
+    run = _make_run()
+
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = work_record
+    run_state.get_run.return_value = run
+
+    kanban = MagicMock()
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    card_result = CardResult(
+        task_id="task-start",
+        event_id=1,
+        event_kind="completed",
+        summary="Start done.",
+        metadata={},
+    )
+
+    # Call without tool_registry.
+    advance_on_completion(
+        card_result=card_result,
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    run_state.save_run.assert_called()
+
+
+def test_advance_tool_node_with_no_outgoing_edge_saves_run() -> None:
+    """TOOL node with no outgoing edge saves run cursor and returns."""
+    start = Node(node_id="start", shape=NodeShape.START)
+    tool_node = Node(node_id="tool_stage", shape=NodeShape.TOOL, profile="tool-runner", prompt="my_tool")
+    # No edge from tool_stage to anywhere.
+    pipeline = Pipeline(
+        spec_id="dead-end-tool",
+        nodes=[start, tool_node],
+        edges=[Edge(source_id="start", target_id="tool_stage")],
+        stylesheet=Stylesheet(rules=[StyleRule(selector="*", profile="default")]),
+    )
+    work_record = RunNode(
+        run_id="run1",
+        node_id="start",
+        task_id="task-start",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=[],
+    )
+    run = _make_run()
+
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = work_record
+    run_state.get_run.return_value = run
+
+    kanban = MagicMock()
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    advance_on_completion(
+        card_result=CardResult(task_id="task-start", event_id=1, event_kind="completed", summary=".", metadata={}),
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    run_state.save_run.assert_called()
+
+
+def test_advance_tool_node_to_excluded_shape_returns_without_card() -> None:
+    """TOOL node followed by FAN_IN (excluded shape) returns without creating a card."""
+    start = Node(node_id="start", shape=NodeShape.START)
+    tool_node = Node(node_id="tool_stage", shape=NodeShape.TOOL, profile="tool-runner", prompt="my_tool")
+    fan_in = Node(node_id="fan_in", shape=NodeShape.FAN_IN, profile="orchestrator")
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    pipeline = Pipeline(
+        spec_id="tool-to-fanin",
+        nodes=[start, tool_node, fan_in, exit_],
+        edges=[
+            Edge(source_id="start", target_id="tool_stage"),
+            Edge(source_id="tool_stage", target_id="fan_in"),
+            Edge(source_id="fan_in", target_id="exit"),
+        ],
+        stylesheet=Stylesheet(rules=[StyleRule(selector="*", profile="default")]),
+    )
+    work_record = RunNode(
+        run_id="run1",
+        node_id="start",
+        task_id="task-start",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=[],
+    )
+    run = _make_run()
+
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = work_record
+    run_state.get_run.return_value = run
+
+    kanban = MagicMock()
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    advance_on_completion(
+        card_result=CardResult(task_id="task-start", event_id=1, event_kind="completed", summary=".", metadata={}),
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    run_state.save_run.assert_called()
+    kanban.create_card.assert_not_called()
+
+
+def test_advance_tool_node_to_non_exit_next_saves_run() -> None:
+    """TOOL node followed by a non-EXIT node saves run without marking SUCCEEDED."""
+    start = Node(node_id="start", shape=NodeShape.START)
+    tool_node = Node(node_id="tool_stage", shape=NodeShape.TOOL, profile="tool-runner", prompt="my_tool")
+    another_work = Node(node_id="after_tool", shape=NodeShape.CODERGEN, profile="coder")
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    pipeline = Pipeline(
+        spec_id="tool-then-work",
+        nodes=[start, tool_node, another_work, exit_],
+        edges=[
+            Edge(source_id="start", target_id="tool_stage"),
+            Edge(source_id="tool_stage", target_id="after_tool"),
+            Edge(source_id="after_tool", target_id="exit"),
+        ],
+        stylesheet=Stylesheet(rules=[StyleRule(selector="*", profile="default")]),
+    )
+    work_record = RunNode(
+        run_id="run1",
+        node_id="start",
+        task_id="task-start",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=[],
+    )
+    run = _make_run()
+
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = work_record
+    run_state.get_run.return_value = run
+
+    kanban = MagicMock()
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    advance_on_completion(
+        card_result=CardResult(task_id="task-start", event_id=1, event_kind="completed", summary=".", metadata={}),
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    # Not SUCCEEDED (after_tool is not EXIT).
+    run_state.save_run.assert_called()
+    # A card should be created for after_tool.
+    kanban.create_card.assert_called()
+
+
+# ---------------------------------------------------------------------------
 # Goal gate routing
 # ---------------------------------------------------------------------------
 

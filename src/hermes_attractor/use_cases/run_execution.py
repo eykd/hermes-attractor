@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import re
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from hermes_attractor.domain.card import Card, CardKind
 from hermes_attractor.domain.constants import MAX_FAN_OUT_WIDTH
@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from hermes_attractor.ports.kanban import KanbanBoard
     from hermes_attractor.ports.pipeline_store import PipelineStore
     from hermes_attractor.ports.run_state import RunStateStore
+    from hermes_attractor.ports.tool_node import ToolNodeRegistry
 
 _log = logging.getLogger(__name__)
 
@@ -194,13 +195,14 @@ def launch_run(  # noqa: PLR0913
     return {"run_id": run_id, "status": run.status.value}
 
 
-def advance_on_completion(  # noqa: PLR0912, PLR0915, PLR0911, C901
+def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
     *,
     card_result: CardResult,
     kanban: KanbanBoard,
     run_state: RunStateStore,
     pipeline: Pipeline,
     clock: Clock,
+    tool_registry: ToolNodeRegistry | None = None,
 ) -> None:
     """Advance the run state machine when a kanban card completes.
 
@@ -226,6 +228,8 @@ def advance_on_completion(  # noqa: PLR0912, PLR0915, PLR0911, C901
         run_state: The RunStateStore port for reading and persisting state.
         pipeline: The Pipeline domain object for traversal.
         clock: The Clock port for timestamps.
+        tool_registry: Optional ToolNodeRegistry for inline TOOL node dispatch.
+            When ``None``, TOOL nodes execute as a no-op (context unchanged).
     """
     node_record = run_state.get_node_by_task(card_result.task_id)
     if node_record is None:
@@ -483,7 +487,83 @@ def advance_on_completion(  # noqa: PLR0912, PLR0915, PLR0911, C901
                 parent_node_ids=[node_record.node_id],
             )
             run_state.upsert_node(fan_in_run_node)
-        elif next_node and next_node.shape not in (NodeShape.EXIT, NodeShape.HUMAN):
+        elif next_node and next_node.shape is NodeShape.TOOL:
+            # TOOL node: run deterministic tool inline (no kanban card).
+            # The tool name is stored in the node's prompt field.
+            tool_name = next_node.prompt or ""
+            tool_result: dict[str, object] = {}
+            if tool_registry is not None and tool_name:
+                raw = tool_registry.run(tool_name, run.context)
+                tool_result = cast("dict[str, object]", raw) if isinstance(raw, dict) else {}
+            # Apply context_updates from the tool result.
+            raw_updates = tool_result.get("context_updates")
+            if isinstance(raw_updates, dict):
+                updates: Mapping[str, object] = cast("Mapping[str, object]", raw_updates)
+                updated_context = run.context.apply(updates)
+            else:
+                updated_context = run.context
+            # Update run with new context and save cursor.
+            tool_run = Run(
+                run_id=run.run_id,
+                spec_id=run.spec_id,
+                status=run.status,
+                context=updated_context,
+                created_at=run.created_at,
+                updated_at=now,
+                root_task_id=run.root_task_id,
+                last_seen_event_id=card_result.event_id,
+            )
+            run_state.save_run(tool_run)
+            # Now select next edge from the TOOL node and continue inline.
+            tool_out_edges = [e for e in pipeline.edges if e.source_id == next_node.node_id]
+            tool_next_edge = select_edge(
+                tool_out_edges, context=dict(updated_context.data), routing_hint=None, suggested_nodes=[]
+            )
+            if tool_next_edge:
+                tool_next_node = node_map.get(tool_next_edge.target_id)
+                if tool_next_node and tool_next_node.shape is NodeShape.EXIT:
+                    exit_run = Run(
+                        run_id=run.run_id,
+                        spec_id=run.spec_id,
+                        status=RunStatus.SUCCEEDED,
+                        context=updated_context,
+                        created_at=run.created_at,
+                        updated_at=now,
+                        root_task_id=run.root_task_id,
+                        last_seen_event_id=card_result.event_id,
+                    )
+                    run_state.save_run(exit_run)
+                elif tool_next_node and tool_next_node.shape not in (
+                    NodeShape.EXIT,
+                    NodeShape.TOOL,
+                    NodeShape.HUMAN,
+                    NodeShape.FAN_IN,
+                ):
+                    # Dispatch a card for the next regular node.
+                    t_profile = pipeline.resolve_profile(tool_next_node) or ""
+                    t_body = _expand_prompt(tool_next_node.prompt or "", updated_context.data)
+                    t_key = IdempotencyKey.for_node(run.run_id, tool_next_node.node_id, 1)
+                    t_card = Card(
+                        idempotency_key=t_key,
+                        assignee_profile=t_profile,
+                        body=t_body,
+                        parent_task_ids=[card_result.task_id],
+                        retry_limit=tool_next_node.retry_limit,
+                        kind=_card_kind_for_node(tool_next_node.shape),
+                    )
+                    t_task_id = kanban.create_card(t_card)
+                    t_run_node = RunNode(
+                        run_id=run.run_id,
+                        node_id=tool_next_node.node_id,
+                        task_id=t_task_id,
+                        status=NodeRunStatus.DISPATCHED,
+                        attempt=1,
+                        parent_node_ids=[next_node.node_id],
+                    )
+                    run_state.upsert_node(t_run_node)
+                    # Save run with new context (already done above).
+            return
+        elif next_node and next_node.shape not in (NodeShape.EXIT, NodeShape.HUMAN, NodeShape.TOOL):
             profile = pipeline.resolve_profile(next_node) or ""
             prompt_template = next_node.prompt or ""
             body = _expand_prompt(prompt_template, run.context.data)

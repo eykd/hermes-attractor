@@ -33,13 +33,7 @@ from hermes_attractor.domain.pipeline import (
 from hermes_attractor.domain.run import NodeRunStatus, Run, RunNode, RunStatus
 from hermes_attractor.use_cases.run_execution import advance_on_completion
 
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.xfail(
-        reason="TOOL node dispatch in advance_on_completion not yet implemented (US7)",
-        strict=True,
-    ),
-]
+pytestmark = pytest.mark.integration
 
 _NOW = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
 _LATER = datetime.datetime(2026, 1, 1, second=10, tzinfo=datetime.UTC)
@@ -136,7 +130,7 @@ def test_tool_node_invokes_registered_tool_and_updates_context() -> None:
         run_state=run_state,
         pipeline=pipeline,
         clock=clock,
-        tool_registry=tool_registry,  # type: ignore[call-arg]  # not yet in signature
+        tool_registry=tool_registry,
     )
 
     # Tool should have been invoked.
@@ -194,7 +188,7 @@ def test_tool_node_reaches_exit_after_tool_execution() -> None:
         run_state=run_state,
         pipeline=pipeline,
         clock=clock,
-        tool_registry=tool_registry,  # type: ignore[call-arg]
+        tool_registry=tool_registry,
     )
 
     # TOOL node runs inline — no kanban card for the tool stage itself.
