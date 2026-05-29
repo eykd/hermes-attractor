@@ -289,6 +289,80 @@ def test_fan_in_resolves_after_all_branch_completions_with_merged_context() -> N
     assert fan_in_records, "fan_in should be dispatched after all branches complete"
 
 
+def test_fan_in_run_node_records_all_predecessor_node_ids() -> None:
+    """FAN_IN RunNode.parent_node_ids contains all predecessor branch node_ids.
+
+    GIVEN a pipeline with 3 branches all feeding into fan_in
+    WHEN all branches complete and the fan_in card is dispatched
+    THEN the fan_in RunNode.parent_node_ids contains branch_a, branch_b, and branch_c.
+    """
+    pipeline = _make_fan_pipeline()
+    run_state, runs, nodes = _make_fake_state()
+
+    run_id = "fan-run-parent-ids"
+    run = Run(
+        run_id=run_id,
+        spec_id="fan-pipeline",
+        status=RunStatus.RUNNING,
+        context=Context(data={}),
+        created_at=_NOW,
+        updated_at=_NOW,
+        last_seen_event_id=1,
+    )
+    runs[run_id] = run
+
+    branch_tasks = {"branch_a": "task-a", "branch_b": "task-b", "branch_c": "task-c"}
+    for node_id, task_id in branch_tasks.items():
+        nodes.append(
+            RunNode(
+                run_id=run_id,
+                node_id=node_id,
+                task_id=task_id,
+                status=NodeRunStatus.DISPATCHED,
+                attempt=1,
+                parent_node_ids=["fan_out"],
+            )
+        )
+
+    task_counter: list[int] = [30]
+
+    def _create_card(card: object) -> str:
+        """Return a sequential task ID."""
+        task_id = f"task-{task_counter[0]:03d}"
+        task_counter[0] += 1
+        return task_id
+
+    kanban = MagicMock()
+    kanban.create_card.side_effect = _create_card
+    clock = MagicMock()
+    clock.now.return_value = _LATER
+
+    for branch_task_id in ["task-a", "task-b", "task-c"]:
+        advance_on_completion(
+            card_result=CardResult(
+                task_id=branch_task_id,
+                event_id=2,
+                event_kind="completed",
+                summary="Branch done.",
+                metadata={},
+            ),
+            kanban=kanban,
+            run_state=run_state,
+            pipeline=pipeline,
+            clock=clock,
+        )
+
+    fan_in_records = [n for n in nodes if n.node_id == "fan_in"]
+    assert fan_in_records, "fan_in should be dispatched after all branches complete"
+    fan_in_node = fan_in_records[-1]
+    expected_predecessors = {"branch_a", "branch_b", "branch_c"}
+    actual_predecessors = set(fan_in_node.parent_node_ids)
+    assert actual_predecessors == expected_predecessors, (
+        f"fan_in RunNode.parent_node_ids should contain all predecessor branch ids; "
+        f"expected {expected_predecessors}, got {actual_predecessors}"
+    )
+
+
 def test_fan_in_merge_conflict_recorded_under_merge_conflicts_key() -> None:
     """Conflicting context keys from parallel branches appear under _merge_conflicts.
 

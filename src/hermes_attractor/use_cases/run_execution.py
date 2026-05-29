@@ -580,7 +580,7 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
                 task_id=fan_in_task_id,
                 status=NodeRunStatus.DISPATCHED,
                 attempt=1,
-                parent_node_ids=[node_record.node_id],
+                parent_node_ids=list(fan_in_predecessors),
             )
             run_state.upsert_node(fan_in_run_node)
         elif next_node and next_node.shape is NodeShape.TOOL:
