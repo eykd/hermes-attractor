@@ -755,3 +755,193 @@ def test_attractor_result_handler_returns_ok_json() -> None:
     assert result["run_id"] == "run1"
     assert result["status"] == RunStatus.SUCCEEDED.value
     assert "outcome" in result
+
+
+# ---------------------------------------------------------------------------
+# Goal gate routing
+# ---------------------------------------------------------------------------
+
+
+def _make_gate_pipeline_unit() -> Pipeline:
+    """Build: start -> work -> gate -> exit (gate has retry_target=work, max_attempts=2)."""
+    start = Node(node_id="start", shape=NodeShape.START)
+    work = Node(node_id="work", shape=NodeShape.CODERGEN, profile="coder")
+    gate = Node(
+        node_id="gate",
+        shape=NodeShape.CODERGEN,
+        profile="reviewer",
+        goal_gate=GoalGatePolicy(retry_target="work", max_attempts=2),
+    )
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    edges = [
+        Edge(source_id="start", target_id="work"),
+        Edge(source_id="work", target_id="gate"),
+        Edge(source_id="gate", target_id="work", label="fail"),
+        Edge(source_id="gate", target_id="exit", label="pass"),
+    ]
+    return Pipeline(
+        spec_id="gate-pipeline",
+        nodes=[start, work, gate, exit_],
+        edges=edges,
+        stylesheet=Stylesheet(rules=[StyleRule(selector="*", profile="default")]),
+    )
+
+
+def test_advance_goal_gate_fail_creates_retry_card_with_incremented_attempt() -> None:
+    """Goal gate fail creates retry card at retry_target with next attempt number."""
+    pipeline = _make_gate_pipeline_unit()
+    run = _make_run()
+    gate_node = RunNode(
+        run_id="run1",
+        node_id="gate",
+        task_id="task-gate",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=["work"],
+        goal_gate_policy=GoalGatePolicy(retry_target="work", max_attempts=2),
+    )
+    prev_work = RunNode(
+        run_id="run1",
+        node_id="work",
+        task_id="task-work",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=1,
+        parent_node_ids=["start"],
+    )
+
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = gate_node
+    run_state.get_run.return_value = run
+    run_state.nodes_for_run.return_value = [prev_work, gate_node]
+
+    kanban = MagicMock()
+    kanban.create_card.return_value = "task-retry"
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    card_result = CardResult(
+        task_id="task-gate",
+        event_id=2,
+        event_kind="completed",
+        summary="Gate failed.",
+        metadata={},  # no gate field => fail
+    )
+
+    advance_on_completion(
+        card_result=card_result,
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    kanban.create_card.assert_called()
+    retry_card = kanban.create_card.call_args[0][0]
+    assert "work" in retry_card.idempotency_key.value
+    assert "attempt:2" in retry_card.idempotency_key.value
+
+
+def test_advance_goal_gate_fail_with_nonexistent_retry_target_saves_run() -> None:
+    """Goal gate fail when retry_target node doesn't exist still saves run cursor."""
+    pipeline = _make_gate_pipeline_unit()
+    run = _make_run()
+    gate_node = RunNode(
+        run_id="run1",
+        node_id="gate",
+        task_id="task-gate",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=["work"],
+        # retry_target points to a node that doesn't exist in the pipeline
+        goal_gate_policy=GoalGatePolicy(retry_target="ghost_retry_target", max_attempts=3),
+    )
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = gate_node
+    run_state.get_run.return_value = run
+    run_state.nodes_for_run.return_value = [gate_node]
+
+    kanban = MagicMock()
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    card_result = CardResult(
+        task_id="task-gate",
+        event_id=2,
+        event_kind="completed",
+        summary="Failed.",
+        metadata={},
+    )
+
+    advance_on_completion(
+        card_result=card_result,
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    # When retry_target doesn't exist, falls through to normal edge routing.
+    # The run cursor should still be saved.
+    run_state.save_run.assert_called()
+
+
+def test_advance_goal_gate_exhausted_blocks_run() -> None:
+    """When max_attempts is exhausted the run transitions to BLOCKED."""
+    pipeline = _make_gate_pipeline_unit()
+    run = _make_run()
+    gate_node = RunNode(
+        run_id="run1",
+        node_id="gate",
+        task_id="task-gate",
+        status=NodeRunStatus.RUNNING,
+        attempt=2,  # second gate attempt
+        parent_node_ids=["work"],
+        goal_gate_policy=GoalGatePolicy(retry_target="work", max_attempts=2),
+    )
+    # Two previous "work" attempts means next_attempt=3 > max_attempts=2.
+    prev_work_1 = RunNode(
+        run_id="run1",
+        node_id="work",
+        task_id="task-work-1",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=1,
+        parent_node_ids=["start"],
+    )
+    prev_work_2 = RunNode(
+        run_id="run1",
+        node_id="work",
+        task_id="task-work-2",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=2,
+        parent_node_ids=["gate"],
+    )
+
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = gate_node
+    run_state.get_run.return_value = run
+    run_state.nodes_for_run.return_value = [prev_work_1, prev_work_2, gate_node]
+
+    kanban = MagicMock()
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    card_result = CardResult(
+        task_id="task-gate",
+        event_id=4,
+        event_kind="completed",
+        summary="Gate failed again.",
+        metadata={},
+    )
+
+    advance_on_completion(
+        card_result=card_result,
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    run_state.save_run.assert_called()
+    saved_run: Run = run_state.save_run.call_args[0][0]
+    assert saved_run.status is RunStatus.BLOCKED
+    kanban.create_card.assert_not_called()

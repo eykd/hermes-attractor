@@ -194,7 +194,7 @@ def launch_run(  # noqa: PLR0913
     return {"run_id": run_id, "status": run.status.value}
 
 
-def advance_on_completion(  # noqa: PLR0912, PLR0915, C901
+def advance_on_completion(  # noqa: PLR0912, PLR0915, PLR0911, C901
     *,
     card_result: CardResult,
     kanban: KanbanBoard,
@@ -306,6 +306,67 @@ def advance_on_completion(  # noqa: PLR0912, PLR0915, C901
         )
         run_state.save_run(updated_run)
         return
+
+    # Goal gate routing: when a gate node fails and has a GoalGatePolicy, route to
+    # the retry_target with incremented attempt count. If max_attempts is exhausted,
+    # transition the run to BLOCKED.
+    if not gate_passed and node_record.goal_gate_policy is not None:
+        policy = node_record.goal_gate_policy
+        retry_target = policy.retry_target
+        retry_node = node_map.get(retry_target)
+        # Count previous attempts at the retry_target node.
+        all_nodes = run_state.nodes_for_run(run.run_id)
+        prev_attempts = sum(1 for n in all_nodes if n.node_id == retry_target)
+        next_attempt = prev_attempts + 1
+        if next_attempt > policy.max_attempts:
+            # Exhausted: block the run.
+            blocked_run = Run(
+                run_id=run.run_id,
+                spec_id=run.spec_id,
+                status=RunStatus.BLOCKED,
+                context=run.context,
+                created_at=run.created_at,
+                updated_at=now,
+                root_task_id=run.root_task_id,
+                last_seen_event_id=card_result.event_id,
+            )
+            run_state.save_run(blocked_run)
+            return
+        if retry_node is not None:
+            retry_profile = pipeline.resolve_profile(retry_node) or ""
+            retry_body = _expand_prompt(retry_node.prompt or "", run.context.data)
+            retry_key = IdempotencyKey.for_node(run.run_id, retry_target, next_attempt)
+            retry_card = Card(
+                idempotency_key=retry_key,
+                assignee_profile=retry_profile,
+                body=retry_body,
+                parent_task_ids=[card_result.task_id],
+                retry_limit=retry_node.retry_limit,
+                kind=_card_kind_for_node(retry_node.shape),
+            )
+            retry_task_id = kanban.create_card(retry_card)
+            retry_run_node = RunNode(
+                run_id=run.run_id,
+                node_id=retry_target,
+                task_id=retry_task_id,
+                status=NodeRunStatus.DISPATCHED,
+                attempt=next_attempt,
+                parent_node_ids=[node_record.node_id],
+                goal_gate_policy=None,
+            )
+            run_state.upsert_node(retry_run_node)
+            updated_run = Run(
+                run_id=run.run_id,
+                spec_id=run.spec_id,
+                status=run.status,
+                context=run.context,
+                created_at=run.created_at,
+                updated_at=now,
+                root_task_id=run.root_task_id,
+                last_seen_event_id=card_result.event_id,
+            )
+            run_state.save_run(updated_run)
+            return
 
     # FAN_IN: check if all predecessor branches have completed before dispatching.
     # Select the next edge.
