@@ -244,6 +244,29 @@ load-bearing and MUST be designed into the relevant ports/use cases, not bolted 
   `domain/guard.py` — a pure, total domain function (replay-safe like `EdgeSelector`). An
   unparseable guard or a guard exceeding the size cap is a **validation error** (FR-004),
   not a runtime surprise.
+- **Parse-tree depth cap (second-order: the 512-char cap does not bound recursion).** The
+  512-character size cap bounds the input *length* but NOT the parse-tree *depth*. Within
+  512 chars an attacker-authored guard can drive the recursive-descent parser arbitrarily
+  deep: ~128 chained `not ` prefixes, or up to 256 nested `(` parentheses, each consuming a
+  recursion frame. Unbounded recursion turns a "pure, total" guard into a `RecursionError`
+  during `validate()` or during a runtime guard eval — exactly the runtime surprise this
+  section claims to preclude. Mitigation: enforce a **maximum nesting depth of 32**
+  (`MAX_GUARD_DEPTH = 32` in `domain/constants.py`), tracked as an explicit integer counter
+  threaded through the recursive descent (NOT relying on Python's `sys.recursionlimit`).
+  Exceeding the depth is a structured `PipelineValidationError` at parse time, never an
+  uncaught `RecursionError`. The depth check is part of what makes the guard *total*.
+- **Dot-path traversal must be total over non-mapping intermediates (second-order: the
+  EBNF KEY regex over-admits, and traversal semantics are unspecified).** The KEY production
+  `[A-Za-z_][A-Za-z0-9_.]*` admits malformed paths the "4 levels deep" prose does not reject:
+  trailing dot (`a.`), doubled dots (`a..b`), and paths *longer* than 4 segments (`a.b.c.d.e`
+  still matches the regex). Tokenization MUST reject empty path segments and reject more than
+  4 segments as a validation error, not silently accept them. Separately, evaluation of a
+  nested path like `a.b.c` when an intermediate value is a non-mapping (e.g. `a` is a string,
+  number, list, or `null`) has no defined behavior in the current grammar prose: a naive
+  `dict`-walk would raise `TypeError`/`KeyError` at runtime, breaking totality. Mitigation:
+  path resolution is total — descending into a non-mapping (or hitting a missing segment at
+  any level) yields the *missing-key* result (falsy as a bare KEY; `false` in any comparison),
+  never an exception. Document this as a guard-evaluator invariant covered by tests.
 
 ### Prompt / `$var` expansion (FR-022) — template, not interpolation
 
@@ -258,6 +281,17 @@ load-bearing and MUST be designed into the relevant ports/use cases, not bolted 
   downstream worker can see an explicit marker rather than a silently-empty or missing
   value. The marker format makes it searchable in logs and is never mistakable for a valid
   context value. They never leak the raw context object or adjacent keys.
+- **Sentinel must not leak into the guard mini-language's truthiness/comparison domain
+  (second-order: `$var` expansion and guards read the same Context).** The
+  `__UNDEFINED_VAR_<name>__` marker is a *prompt-body* artifact only — it MUST be produced
+  during card-body string expansion and MUST NOT be written back into the `Context.data`
+  that the guard evaluator reads. A guard referencing a missing key must follow the guard's
+  own missing-key rule (falsy / `false`), and must never observe a stringified sentinel that
+  would compare truthy or match a `== "__UNDEFINED_VAR_x__"` literal. Conversely, a worker
+  that writes a context value literally equal to the sentinel string must not gain the
+  ability to forge an "undefined" appearance downstream: expansion distinguishes
+  genuinely-absent keys from present-but-equal-to-sentinel values (only absence yields the
+  marker). The sentinel lives in the expansion layer, not in the persisted Context.
 
 ### Path / repo handling (FR-003) — `spec_id` and `repo_path` are untrusted
 
@@ -376,6 +410,26 @@ Added by red-team Pass 1.
   (not a runtime-configurable setting — it is a safety invariant, not an operational tuning
   knob). Exceeding it yields a `PipelineValidationError` at authoring time and a blocked run
   with a structured reason at runtime rather than flooding the board.
+- **Nested fan-out compounding and the self-hosting `sp` reference-pipeline conflict
+  (second-order: a per-node cap of 16 does not bound total card explosion, and collides with
+  M6/SC-006).** `MAX_FAN_OUT_WIDTH = 16` is a *per-node* width cap; it does not bound the
+  *cumulative* card count when a fan-out branch itself reaches another fan-out (16 × 16 × …),
+  which an untrusted DOT graph can author. More pressingly, this concrete cap now collides
+  with a concrete reference workflow: the M6/SC-006 self-hosting `sp` pipeline models ralph
+  draining a *dynamic* ready-queue and the deepen-plan/red-team/review stages fanning out a
+  data-dependent number of parallel sub-tasks — a count that is plausibly variable and can
+  exceed 16. A hard, non-configurable safety invariant of 16 would make the capstone
+  reference pipeline (which is supposed to exercise *every* v1 capability) either fail
+  validation or be forced to chunk its fan-out, undermining SC-006. Resolution: (a) the
+  fan-out cap bounds the count of *direct simultaneous children of a single fan-out node*,
+  and the engine MUST additionally bound the *total live (non-terminal) card count per run*
+  with a separate constant `MAX_LIVE_CARDS_PER_RUN` so nested fan-outs cannot compound past a
+  whole-run ceiling; (b) the `sp` reference pipeline MUST model unbounded work as *sequential
+  iteration over a bounded-width fan-out batch* (process ready-queue items in waves of ≤16),
+  NOT as a single mega-fan-out — this is the same acyclic-iteration pattern already mandated
+  for goal-gate loops (D4). M6 must demonstrate this batching pattern; if the reference graph
+  cannot be expressed within the cap via batching, that is a signal to revisit the constant
+  *before* M6, recorded as a risk rather than silently raising the limit.
 
 ### Bounded event-log replay
 
@@ -384,6 +438,18 @@ Added by red-team Pass 1.
   persisting the cursor after each batch, so a far-behind reconcile makes monotonic progress
   without loading the whole log into memory. The batch size is a named constant
   `EVENT_LOG_BATCH_SIZE = 100` in `domain/constants.py`.
+- **Batch-boundary correctness for fan-in aggregation (second-order: per-batch cursor
+  persistence must not strand a fan-in).** A FAN_IN node resolves only after *all* its branch
+  completions are observed. When branch-completion events straddle the 100-event batch
+  boundary (e.g. branches 1–3 land in batch K, branch 4 in batch K+1), persisting the cursor
+  at the end of batch K marks branches 1–3's events as permanently "seen". Correctness
+  therefore depends on fan-in aggregation state being **durable RunNode state**, not derived
+  from re-reading those events: each branch completion durably records arrival on the FAN_IN
+  RunNode within the same transaction that advances the cursor, so the fan-in resolves when
+  the final branch's event is processed in a later batch. This makes batch size purely a
+  memory/throughput knob with no effect on aggregation correctness. State that explicitly:
+  the advance core MUST never require two events from *different* batches to be in memory
+  simultaneously to resolve a merge.
 
 ### Run-state query shape
 
