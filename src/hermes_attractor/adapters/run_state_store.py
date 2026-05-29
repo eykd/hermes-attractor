@@ -25,6 +25,8 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger(__name__)
 
+#: DDL that creates the run-state schema and configures WAL + busy_timeout.
+#: Idempotent (IF NOT EXISTS); safe to run on every connection open.
 _DDL = """\
 PRAGMA journal_mode=WAL;
 PRAGMA busy_timeout=5000;
