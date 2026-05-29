@@ -137,6 +137,9 @@ def test_handle_attractor_create_and_add_node_ok(tmp_path: Path) -> None:
         )
         payload = _assert_json_response(response)
         assert payload["ok"] is True
+        result = payload["result"]
+        assert isinstance(result, dict)
+        assert result["shape"] == "START"
     finally:
         if old_env is None:
             _ = os.environ.pop("ATTRACTOR_REPO_BASE", None)

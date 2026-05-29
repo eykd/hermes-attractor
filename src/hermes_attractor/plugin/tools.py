@@ -175,7 +175,7 @@ def handle_attractor_add_node(args: dict[str, object]) -> str:
         node_class = str(args["class"]) if args.get("class") else None
         store = _make_store(args)
         serializer = PydotSerializer()
-        updated = add_node(
+        _ = add_node(
             spec_id=spec_id,
             node_id=node_id,
             shape=shape,
@@ -186,7 +186,7 @@ def handle_attractor_add_node(args: dict[str, object]) -> str:
             store=store,
             serializer=serializer,
         )
-        return {"spec_id": spec_id, "node_id": node_id, "shape": updated.spec_id}
+        return {"spec_id": spec_id, "node_id": node_id, "shape": shape_str}
 
     return _safe(_produce)
 
