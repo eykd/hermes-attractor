@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 from pathlib import Path  # noqa: TC003  # used in function signatures at runtime
+from unittest.mock import MagicMock
 
 import pytest
 
+from hermes_attractor.domain.pipeline import (
+    Context,
+    Edge,
+    Node,
+    NodeShape,
+    Pipeline,
+    StyleRule,
+    Stylesheet,
+)
+from hermes_attractor.domain.run import NodeRunStatus, Run, RunNode, RunStatus
 from hermes_attractor.plugin.tools import (
     handle_attractor_add_edge,
     handle_attractor_add_node,
@@ -25,6 +37,84 @@ from hermes_attractor.plugin.tools import (
 )
 
 pytestmark = pytest.mark.unit
+
+_NOW = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
+
+
+def _make_pipeline(
+    *,
+    spec_id: str = "spec-a",
+    node_profile: str = "coder",
+    prompt: str = "Implement $task.",
+) -> Pipeline:
+    """Build a minimal Pipeline for a start -> work -> exit linear pipeline.
+
+    Args:
+        spec_id: Pipeline spec identifier.
+        node_profile: The resolved profile for the work node.
+        prompt: The work node's prompt template.
+
+    Returns:
+        A Pipeline instance.
+    """
+    start = Node(node_id="start", shape=NodeShape.START)
+    work = Node(node_id="work", shape=NodeShape.CODERGEN, profile=node_profile, prompt=prompt)
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    edges = [
+        Edge(source_id="start", target_id="work"),
+        Edge(source_id="work", target_id="exit"),
+    ]
+    stylesheet = Stylesheet(rules=[StyleRule(selector="*", profile="default")])
+    return Pipeline(
+        spec_id=spec_id,
+        nodes=[start, work, exit_],
+        edges=edges,
+        stylesheet=stylesheet,
+    )
+
+
+def _make_run(status: RunStatus = RunStatus.RUNNING) -> Run:
+    """Build a minimal Run for testing.
+
+    Args:
+        status: The run's lifecycle status.
+
+    Returns:
+        A Run instance.
+    """
+    return Run(
+        run_id="run1",
+        spec_id="spec-a",
+        status=status,
+        context=Context(data={"task": "write tests"}),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+
+def _make_run_node(
+    node_id: str = "work",
+    status: NodeRunStatus = NodeRunStatus.RUNNING,
+    task_id: str = "task-001",
+) -> RunNode:
+    """Build a minimal RunNode for testing.
+
+    Args:
+        node_id: The pipeline node identifier.
+        status: The node's current execution status.
+        task_id: The kanban task identifier.
+
+    Returns:
+        A RunNode instance.
+    """
+    return RunNode(
+        run_id="run1",
+        node_id=node_id,
+        task_id=task_id,
+        status=status,
+        attempt=1,
+        parent_node_ids=[],
+    )
 
 
 def test_handle_health_returns_ok_payload() -> None:
@@ -337,3 +427,72 @@ def test_handle_attractor_set_stylesheet_empty_rules_never_raises(tmp_path: Path
             _ = os.environ.pop("ATTRACTOR_REPO_BASE", None)
         else:
             os.environ["ATTRACTOR_REPO_BASE"] = old_env
+
+
+# ---------------------------------------------------------------------------
+# Handler integration: happy-path JSON envelope tests (moved from use_cases).
+# These verify the full call chain through the tool handler API.
+# ---------------------------------------------------------------------------
+
+
+def test_attractor_run_handler_returns_ok_json_with_run_id_and_status() -> None:
+    """attractor_run tool handler returns {ok:true, result:{run_id, status}} JSON."""
+    pipeline = _make_pipeline()
+    kanban = MagicMock()
+    kanban.create_card.return_value = "task-001"
+    run_state = MagicMock()
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+    serializer = MagicMock()
+    serializer.parse.return_value = pipeline
+    store = MagicMock()
+    store.load.return_value = "digraph spec-a {}"
+
+    raw = handle_attractor_run(
+        {"spec_id": "spec-a", "context": {"task": "write tests"}},
+        kanban=kanban,
+        run_state=run_state,
+        serializer=serializer,
+        store=store,
+        clock=clock,
+    )
+
+    payload = json.loads(raw)
+    assert payload["ok"] is True
+    assert "run_id" in payload["result"]
+    assert "status" in payload["result"]
+
+
+def test_attractor_status_handler_returns_ok_json_with_status_and_nodes() -> None:
+    """attractor_status tool handler returns {run_id, status, current_nodes, context_keys} JSON."""
+    run = _make_run()
+    node = _make_run_node("work", NodeRunStatus.RUNNING, "task-001")
+    run_state = MagicMock()
+    run_state.get_run.return_value = run
+    run_state.nodes_for_run.return_value = [node]
+
+    raw = handle_attractor_status({"run_id": "run1"}, run_state=run_state)
+
+    payload = json.loads(raw)
+    assert payload["ok"] is True
+    result = payload["result"]
+    assert result["run_id"] == "run1"
+    assert result["status"] == RunStatus.RUNNING.value
+    assert "current_nodes" in result
+    assert "context_keys" in result
+
+
+def test_attractor_result_handler_returns_ok_json() -> None:
+    """handle_attractor_result returns {ok:true, result:{run_id, status, outcome}} JSON."""
+    run = _make_run(RunStatus.SUCCEEDED)
+    run_state = MagicMock()
+    run_state.get_run.return_value = run
+
+    raw = handle_attractor_result({"run_id": "run1"}, run_state=run_state)
+
+    payload = json.loads(raw)
+    assert payload["ok"] is True
+    result = payload["result"]
+    assert result["run_id"] == "run1"
+    assert result["status"] == RunStatus.SUCCEEDED.value
+    assert "outcome" in result

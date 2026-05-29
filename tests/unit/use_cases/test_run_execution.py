@@ -6,7 +6,6 @@ Tests fail until src/hermes_attractor/use_cases/run_execution.py is implemented.
 from __future__ import annotations
 
 import datetime
-import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -24,11 +23,6 @@ from hermes_attractor.domain.pipeline import (
     Stylesheet,
 )
 from hermes_attractor.domain.run import NodeRunStatus, Run, RunNode, RunStatus
-from hermes_attractor.plugin.tools import (
-    handle_attractor_result,
-    handle_attractor_run,
-    handle_attractor_status,
-)
 from hermes_attractor.use_cases.run_execution import (
     _card_kind_for_node,  # pyright: ignore[reportPrivateUsage]
     advance_on_completion,
@@ -365,58 +359,6 @@ def test_advance_on_completion_missing_gate_field_routes_to_retry() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tool handler JSON envelope
-# ---------------------------------------------------------------------------
-
-
-def test_attractor_run_handler_returns_ok_json_with_run_id_and_status() -> None:
-    """attractor_run tool handler returns {ok:true, result:{run_id, status}} JSON."""
-    pipeline = _make_pipeline()
-    kanban = MagicMock()
-    kanban.create_card.return_value = "task-001"
-    run_state = MagicMock()
-    clock = MagicMock()
-    clock.now.return_value = _NOW
-    serializer = MagicMock()
-    serializer.parse.return_value = pipeline
-    store = MagicMock()
-    store.load.return_value = "digraph spec-a {}"
-
-    raw = handle_attractor_run(
-        {"spec_id": "spec-a", "context": {"task": "write tests"}},
-        kanban=kanban,
-        run_state=run_state,
-        serializer=serializer,
-        store=store,
-        clock=clock,
-    )
-
-    payload = json.loads(raw)
-    assert payload["ok"] is True
-    assert "run_id" in payload["result"]
-    assert "status" in payload["result"]
-
-
-def test_attractor_status_handler_returns_ok_json_with_status_and_nodes() -> None:
-    """attractor_status tool handler returns {run_id, status, current_nodes, context_keys} JSON."""
-    run = _make_run()
-    node = _make_run_node("work", NodeRunStatus.RUNNING, "task-001")
-    run_state = MagicMock()
-    run_state.get_run.return_value = run
-    run_state.nodes_for_run.return_value = [node]
-
-    raw = handle_attractor_status({"run_id": "run1"}, run_state=run_state)
-
-    payload = json.loads(raw)
-    assert payload["ok"] is True
-    result = payload["result"]
-    assert result["run_id"] == "run1"
-    assert result["status"] == RunStatus.RUNNING.value
-    assert "current_nodes" in result
-    assert "context_keys" in result
-
-
-# ---------------------------------------------------------------------------
 # Additional coverage tests
 # ---------------------------------------------------------------------------
 
@@ -743,22 +685,6 @@ def test_advance_on_completion_exits_when_next_node_is_exit() -> None:
     assert saved_run.status is RunStatus.SUCCEEDED
     # No new card created (EXIT node)
     kanban.create_card.assert_not_called()
-
-
-def test_attractor_result_handler_returns_ok_json() -> None:
-    """handle_attractor_result returns {ok:true, result:{run_id, status, outcome}} JSON."""
-    run = _make_run(RunStatus.SUCCEEDED)
-    run_state = MagicMock()
-    run_state.get_run.return_value = run
-
-    raw = handle_attractor_result({"run_id": "run1"}, run_state=run_state)
-
-    payload = json.loads(raw)
-    assert payload["ok"] is True
-    result = payload["result"]
-    assert result["run_id"] == "run1"
-    assert result["status"] == RunStatus.SUCCEEDED.value
-    assert "outcome" in result
 
 
 # ---------------------------------------------------------------------------
