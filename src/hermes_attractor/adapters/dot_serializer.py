@@ -18,19 +18,27 @@ from hermes_attractor.domain.pipeline import Edge, Node, NodeShape, Pipeline, St
 _DOT_SHAPE_TO_NODE_SHAPE: dict[str, NodeShape] = {shape.value: shape for shape in NodeShape}
 
 
-def _strip_quotes(value: str) -> str:
-    """Strip surrounding quotes from a pydot attribute value string.
+_DOT_MIN_QUOTED_LEN = 2
 
-    pydot returns attribute values with their raw quotes (e.g. ``'"box"'``).
-    This strips leading and trailing ``'`` or ``"`` characters.
+
+def _strip_quotes(value: str) -> str:
+    r"""Strip surrounding double-quotes and unescape DOT escape sequences.
+
+    pydot returns attribute values wrapped in double-quotes with embedded
+    double-quotes escaped as ``\"`` (e.g. ``'"Say \"hello\""'``).
+    This removes the outer quotes and unescapes ``\"`` to ``"`` so the
+    original value is recovered.
 
     Args:
         value: The raw attribute value string from pydot.
 
     Returns:
-        The stripped string value.
+        The unquoted, unescaped string value.
     """
-    return value.strip("\"'")
+    inner = (
+        value[1:-1] if value.startswith('"') and value.endswith('"') and len(value) >= _DOT_MIN_QUOTED_LEN else value
+    )
+    return inner.replace('\\"', '"')
 
 
 class PydotSerializer:
@@ -180,11 +188,11 @@ class PydotSerializer:
         for node in pipeline.nodes:
             attrs: dict[str, str] = {"shape": node.shape.dot_shape}
             if node.profile is not None:
-                attrs["profile"] = f'"{node.profile}"'
+                attrs["profile"] = node.profile
             if node.prompt is not None:
-                attrs["prompt"] = f'"{node.prompt}"'
+                attrs["prompt"] = node.prompt
             if node.node_class is not None:
-                attrs["class"] = f'"{node.node_class}"'
+                attrs["class"] = node.node_class
             if node.retry_limit != 0:
                 attrs["retry_limit"] = str(node.retry_limit)
             pydot_node = pydot.Node(node.node_id, **attrs)  # pyright: ignore[reportArgumentType]
@@ -193,9 +201,9 @@ class PydotSerializer:
         for edge in pipeline.edges:
             edge_attrs: dict[str, str] = {}
             if edge.condition is not None:
-                edge_attrs["condition"] = f'"{edge.condition}"'
+                edge_attrs["condition"] = edge.condition
             if edge.label is not None:
-                edge_attrs["label"] = f'"{edge.label}"'
+                edge_attrs["label"] = edge.label
             if edge.weight != 0:
                 edge_attrs["weight"] = str(edge.weight)
             pydot_edge = pydot.Edge(edge.source_id, edge.target_id, **edge_attrs)  # pyright: ignore[reportArgumentType]

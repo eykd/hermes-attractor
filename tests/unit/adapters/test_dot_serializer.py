@@ -188,3 +188,45 @@ digraph test {
     edge2 = next(iter(pipeline2.edges))
     assert edge2.condition == "done == true"
     assert edge2.weight == 5
+
+
+def test_pydot_serializer_roundtrip_with_embedded_double_quote_in_prompt() -> None:
+    """emit() -> parse() preserves prompt values containing embedded double-quotes."""
+    serializer = PydotSerializer()
+    pipeline = Pipeline(
+        spec_id="quote_test",
+        nodes=[
+            Node(node_id="start", shape=NodeShape.START),
+            Node(node_id="work", shape=NodeShape.CODERGEN, prompt='Say "hello"'),
+            Node(node_id="exit", shape=NodeShape.EXIT),
+        ],
+        edges=[
+            Edge(source_id="start", target_id="work"),
+            Edge(source_id="work", target_id="exit"),
+        ],
+        stylesheet=Stylesheet(rules=[]),
+    )
+    dot_out = serializer.emit(pipeline)
+    pipeline2 = serializer.parse(dot_out)
+    work2 = next(n for n in pipeline2.nodes if n.node_id == "work")
+    assert work2.prompt == 'Say "hello"'
+
+
+def test_pydot_serializer_roundtrip_with_embedded_backslash_in_condition() -> None:
+    """emit() -> parse() preserves edge condition values containing backslashes."""
+    serializer = PydotSerializer()
+    pipeline = Pipeline(
+        spec_id="backslash_test",
+        nodes=[
+            Node(node_id="start", shape=NodeShape.START),
+            Node(node_id="exit", shape=NodeShape.EXIT),
+        ],
+        edges=[
+            Edge(source_id="start", target_id="exit", condition=r"path\to\value == 1"),
+        ],
+        stylesheet=Stylesheet(rules=[]),
+    )
+    dot_out = serializer.emit(pipeline)
+    pipeline2 = serializer.parse(dot_out)
+    edge2 = next(iter(pipeline2.edges))
+    assert edge2.condition == r"path\to\value == 1"
