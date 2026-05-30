@@ -2382,3 +2382,348 @@ def test_advance_on_completion_suggested_next_as_list_routes_non_gate_node() -> 
         f"Expected branch_b (suggested_next=['branch_b']), but got {next_node.node_id!r}. "
         "Bug: suggested_next as list is not passed to select_edge as suggested_nodes."
     )
+
+
+# ---------------------------------------------------------------------------
+# Bug: FAN_IN double-applies branch context_updates (zym.42)
+# ---------------------------------------------------------------------------
+
+
+def _make_fan_in_pipeline_for_merge_tests(spec_id: str = "fan-in-merge-pipeline") -> Pipeline:
+    """Build: start -> fan_out -> [branch_a, branch_b] -> fan_in -> exit.
+
+    Used to drive the full FAN_IN merge path with two parallel branches.
+
+    Args:
+        spec_id: The pipeline spec identifier.
+
+    Returns:
+        A Pipeline domain object.
+    """
+    start = Node(node_id="start", shape=NodeShape.START)
+    fan_out = Node(node_id="fan_out", shape=NodeShape.FAN_OUT, profile="orchestrator")
+    branch_a = Node(node_id="branch_a", shape=NodeShape.CODERGEN, profile="coder")
+    branch_b = Node(node_id="branch_b", shape=NodeShape.CODERGEN, profile="coder")
+    fan_in = Node(node_id="fan_in", shape=NodeShape.FAN_IN, profile="merger")
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    return Pipeline(
+        spec_id=spec_id,
+        nodes=[start, fan_out, branch_a, branch_b, fan_in, exit_],
+        edges=[
+            Edge(source_id="start", target_id="fan_out"),
+            Edge(source_id="fan_out", target_id="branch_a"),
+            Edge(source_id="fan_out", target_id="branch_b"),
+            Edge(source_id="branch_a", target_id="fan_in"),
+            Edge(source_id="branch_b", target_id="fan_in"),
+            Edge(source_id="fan_in", target_id="exit"),
+        ],
+        stylesheet=Stylesheet(rules=[StyleRule(selector="*", profile="default")]),
+    )
+
+
+def test_fan_in_merge_scalar_conflict_no_duplication() -> None:
+    """FAN_IN: merged context must show each branch value exactly once (scalar conflict).
+
+    Bug: branch_a's context_updates are applied to run.context at branch completion
+    (not-all-done save), then merged again from RunNode.context_updates when FAN_IN fires.
+    Result: ``result`` appears in _merge_conflicts as ['alpha', 'alpha', 'beta'] instead
+    of ['alpha', 'beta'].
+
+    This test drives the full dispatch path:
+    1. FAN_OUT fires, dispatching branch_a and branch_b.
+    2. branch_a completes with context_updates={'result': 'alpha'} — not all done yet.
+    3. branch_b completes with context_updates={'result': 'beta'} — all done, FAN_IN fires.
+    4. The FAN_IN card is created with merged_context; assert _merge_conflicts has exactly
+       two entries (['alpha', 'beta']), not three (['alpha', 'alpha', 'beta']).
+    """
+    pipeline = _make_fan_in_pipeline_for_merge_tests()
+    run = Run(
+        run_id="run-fan-in-scalar",
+        spec_id="fan-in-merge-pipeline",
+        status=RunStatus.RUNNING,
+        context=Context(data={}),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    # --- Step 1: FAN_OUT fires ---
+    fan_out_record = RunNode(
+        run_id="run-fan-in-scalar",
+        node_id="fan_out",
+        task_id="task-fan-out",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=["start"],
+    )
+    run_state_fanout = MagicMock()
+    run_state_fanout.get_node_by_task.return_value = fan_out_record
+    run_state_fanout.get_run.return_value = run
+    kanban_fanout = MagicMock()
+    task_ids = iter(["task-branch-a", "task-branch-b"])
+
+    def _fan_out_task_id(_c: object) -> str:
+        """Return the next task id from the iterator."""
+        return next(task_ids)
+
+    kanban_fanout.create_card.side_effect = _fan_out_task_id
+
+    advance_on_completion(
+        card_result=CardResult(
+            task_id="task-fan-out",
+            event_id=1,
+            event_kind="completed",
+            summary="FAN_OUT done.",
+            metadata={},
+        ),
+        kanban=kanban_fanout,
+        run_state=run_state_fanout,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    # --- Step 2: branch_a completes with result='alpha' (not all done) ---
+    branch_a_record = RunNode(
+        run_id="run-fan-in-scalar",
+        node_id="branch_a",
+        task_id="task-branch-a",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=["fan_out"],
+    )
+    # Simulate persisted state: only branch_a completed so far.
+    branch_a_succeeded = RunNode(
+        run_id="run-fan-in-scalar",
+        node_id="branch_a",
+        task_id="task-branch-a",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=1,
+        parent_node_ids=["fan_out"],
+        context_updates={"result": "alpha"},
+    )
+
+    saved_runs_after_a: list[Run] = []
+    run_state_a = MagicMock()
+    run_state_a.get_node_by_task.return_value = branch_a_record
+    run_state_a.get_run.return_value = run
+    # branch_b is not yet done — only branch_a is in the store
+    run_state_a.nodes_for_run.return_value = [branch_a_succeeded]
+    run_state_a.save_run.side_effect = saved_runs_after_a.append
+    kanban_a = MagicMock()
+    kanban_a.create_card.return_value = "task-fan-in"
+
+    advance_on_completion(
+        card_result=CardResult(
+            task_id="task-branch-a",
+            event_id=2,
+            event_kind="completed",
+            summary="branch_a done.",
+            metadata={"context_updates": {"result": "alpha"}},
+        ),
+        kanban=kanban_a,
+        run_state=run_state_a,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    # Not all done: no FAN_IN card should be created (branch_b still pending).
+    kanban_a.create_card.assert_not_called()
+    # Save run cursor must NOT carry branch_a's context_updates in run.context.
+    assert saved_runs_after_a, "save_run must be called on not-all-done path"
+    run_after_a = saved_runs_after_a[-1]
+    assert "result" not in run_after_a.context.data, (
+        "Bug: branch context_updates must NOT be applied to run.context on not-all-done save; "
+        f"run.context.data={dict(run_after_a.context.data)!r}"
+    )
+
+    # --- Step 3: branch_b completes with result='beta' (all done) ---
+    branch_b_record = RunNode(
+        run_id="run-fan-in-scalar",
+        node_id="branch_b",
+        task_id="task-branch-b",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=["fan_out"],
+    )
+    branch_b_succeeded = RunNode(
+        run_id="run-fan-in-scalar",
+        node_id="branch_b",
+        task_id="task-branch-b",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=1,
+        parent_node_ids=["fan_out"],
+        context_updates={"result": "beta"},
+    )
+
+    saved_runs_after_b: list[Run] = []
+    # FAN_IN fires: run state reflects the not-all-done save (run.context unchanged = {})
+    run_after_not_all_done = run_after_a  # run saved on not-all-done path
+    run_state_b = MagicMock()
+    run_state_b.get_node_by_task.return_value = branch_b_record
+    run_state_b.get_run.return_value = run_after_not_all_done
+    # Both branches now in the store.
+    run_state_b.nodes_for_run.return_value = [branch_a_succeeded, branch_b_succeeded]
+    run_state_b.save_run.side_effect = saved_runs_after_b.append
+    kanban_b = MagicMock()
+    kanban_b.create_card.return_value = "task-fan-in"
+
+    advance_on_completion(
+        card_result=CardResult(
+            task_id="task-branch-b",
+            event_id=3,
+            event_kind="completed",
+            summary="branch_b done.",
+            metadata={"context_updates": {"result": "beta"}},
+        ),
+        kanban=kanban_b,
+        run_state=run_state_b,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    # FAN_IN card must be created.
+    kanban_b.create_card.assert_called_once()
+
+    # Assert exact merged values — no duplication.
+    assert saved_runs_after_b, "save_run must be called after FAN_IN dispatch"
+    final_run = saved_runs_after_b[-1]
+    conflicts = final_run.context.data.get("_merge_conflicts")
+    assert conflicts is not None, (
+        "Expected _merge_conflicts in merged context because both branches wrote 'result'; "
+        f"context.data={dict(final_run.context.data)!r}"
+    )
+    result_conflict = conflicts["result"]  # type: ignore[index]
+    assert result_conflict == ["alpha", "beta"], (
+        f"Bug: FAN_IN double-applies branch context_updates; "
+        f"expected conflict=['alpha','beta'] (each branch once), got {result_conflict!r}. "
+        "Values must appear exactly once, not duplicated."
+    )
+    # Last-writer wins: result should be 'beta' (branch_b is last).
+    assert final_run.context.data.get("result") == "beta", (
+        f"Last-writer (branch_b) wins scalar conflict; expected 'beta', got {final_run.context.data.get('result')!r}"
+    )
+
+
+def test_fan_in_merge_list_accumulate_no_duplication() -> None:
+    """FAN_IN: merged context must accumulate list values exactly once (list-append case).
+
+    Bug: branch_a's context_updates={'items': [1]} applied to run.context first, then
+    merged again from RunNode.context_updates when FAN_IN fires. Lists are concatenated,
+    so items=[1] + [1] + [2] = [1, 1, 2] instead of [1, 2].
+
+    This test uses integer list values to verify list accumulation without duplication.
+    """
+    pipeline = _make_fan_in_pipeline_for_merge_tests("fan-in-list-pipeline")
+    run = Run(
+        run_id="run-fan-in-list",
+        spec_id="fan-in-list-pipeline",
+        status=RunStatus.RUNNING,
+        context=Context(data={}),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    branch_a_succeeded = RunNode(
+        run_id="run-fan-in-list",
+        node_id="branch_a",
+        task_id="task-branch-a",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=1,
+        parent_node_ids=["fan_out"],
+        context_updates={"items": [1]},
+    )
+    branch_b_succeeded = RunNode(
+        run_id="run-fan-in-list",
+        node_id="branch_b",
+        task_id="task-branch-b",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=1,
+        parent_node_ids=["fan_out"],
+        context_updates={"items": [2]},
+    )
+
+    # --- branch_a completes (not all done) ---
+    branch_a_record = RunNode(
+        run_id="run-fan-in-list",
+        node_id="branch_a",
+        task_id="task-branch-a",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=["fan_out"],
+    )
+    saved_runs_a: list[Run] = []
+    run_state_a = MagicMock()
+    run_state_a.get_node_by_task.return_value = branch_a_record
+    run_state_a.get_run.return_value = run
+    run_state_a.nodes_for_run.return_value = [branch_a_succeeded]
+    run_state_a.save_run.side_effect = saved_runs_a.append
+    kanban_a = MagicMock()
+    kanban_a.create_card.return_value = "task-fan-in"
+
+    advance_on_completion(
+        card_result=CardResult(
+            task_id="task-branch-a",
+            event_id=10,
+            event_kind="completed",
+            summary="branch_a done.",
+            metadata={"context_updates": {"items": [1]}},
+        ),
+        kanban=kanban_a,
+        run_state=run_state_a,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    kanban_a.create_card.assert_not_called()
+    assert saved_runs_a, "save_run must be called on not-all-done path"
+    run_after_a = saved_runs_a[-1]
+    # The key assertion: items must NOT be in run.context after not-all-done save.
+    assert "items" not in run_after_a.context.data, (
+        "Bug: branch context_updates must NOT be applied to run.context on not-all-done save; "
+        f"run.context.data={dict(run_after_a.context.data)!r}"
+    )
+
+    # --- branch_b completes (all done) → FAN_IN fires ---
+    branch_b_record = RunNode(
+        run_id="run-fan-in-list",
+        node_id="branch_b",
+        task_id="task-branch-b",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=["fan_out"],
+    )
+    saved_runs_b: list[Run] = []
+    run_state_b = MagicMock()
+    run_state_b.get_node_by_task.return_value = branch_b_record
+    run_state_b.get_run.return_value = run_after_a  # use the not-all-done saved run
+    run_state_b.nodes_for_run.return_value = [branch_a_succeeded, branch_b_succeeded]
+    run_state_b.save_run.side_effect = saved_runs_b.append
+    kanban_b = MagicMock()
+    kanban_b.create_card.return_value = "task-fan-in"
+
+    advance_on_completion(
+        card_result=CardResult(
+            task_id="task-branch-b",
+            event_id=11,
+            event_kind="completed",
+            summary="branch_b done.",
+            metadata={"context_updates": {"items": [2]}},
+        ),
+        kanban=kanban_b,
+        run_state=run_state_b,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    kanban_b.create_card.assert_called_once()
+    assert saved_runs_b, "save_run must be called after FAN_IN dispatch"
+    final_run = saved_runs_b[-1]
+    items = final_run.context.data.get("items")
+    assert items == [1, 2], (
+        f"Bug: FAN_IN double-applies list context_updates; "
+        f"expected items=[1, 2] (each branch contributes once), got {items!r}. "
+        "List concatenation must not duplicate values."
+    )

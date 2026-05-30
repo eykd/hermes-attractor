@@ -345,9 +345,21 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
     run_state.upsert_node(completed_node)
 
     # Apply context_updates to run.context for sequential paths (FR-008).
-    # FAN_IN paths re-merge from RunNode.context_updates later; applying here too is
-    # harmless because the FAN_IN branch unconditionally rebuilds run from merged_context.
-    if node_context_updates:
+    # For FAN_IN paths, the apply is intentionally skipped: the FAN_IN merge is the
+    # single point that folds all branch context_updates (via RunNode.context_updates).
+    # Applying here AND merging at FAN_IN would double-count branch updates (zym.42).
+    # We therefore keep the pre-apply context in ``_pre_fanin_context`` so that the
+    # not-all-done save path can persist it without carrying stale branch updates forward.
+    #
+    # Detect whether the current node feeds into a FAN_IN by inspecting outgoing edges.
+    # (A branch node feeding FAN_IN has at least one outgoing edge to a FAN_IN target.)
+    _feeds_fan_in = any(
+        node_map.get(e.target_id) is not None and node_map[e.target_id].shape is NodeShape.FAN_IN
+        for e in pipeline.edges
+        if e.source_id == node_record.node_id
+    )
+    _pre_fanin_context = run.context  # context BEFORE any branch apply
+    if node_context_updates and not _feeds_fan_in:
         run = Run(
             run_id=run.run_id,
             spec_id=run.spec_id,
@@ -536,11 +548,14 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
             ) and len(predecessor_nodes) == len(fan_in_predecessors)
             if not all_succeeded:
                 # Not all branches done yet — just save cursor and return.
+                # Use _pre_fanin_context (context BEFORE any branch apply) so that branch
+                # context_updates are NOT persisted in run.context here. The FAN_IN merge
+                # is the single point that folds branch updates (zym.42 fix).
                 updated_run = Run(
                     run_id=run.run_id,
                     spec_id=run.spec_id,
                     status=run.status,
-                    context=run.context,
+                    context=_pre_fanin_context,
                     created_at=run.created_at,
                     updated_at=now,
                     root_task_id=run.root_task_id,
