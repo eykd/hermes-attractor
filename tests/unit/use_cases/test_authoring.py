@@ -11,6 +11,7 @@ import pytest
 
 from hermes_attractor.domain.pipeline import (
     Edge,
+    GoalGatePolicy,
     Node,
     NodeShape,
     Pipeline,
@@ -122,3 +123,49 @@ def test_get_summary_returns_summary_and_dot() -> None:
     assert "dot" in result
     assert isinstance(result["summary"], str)
     assert isinstance(result["dot"], str)
+
+
+def test_add_node_with_goal_gate_passes_policy_to_node() -> None:
+    """add_node with goal_gate params creates a Node with GoalGatePolicy set.
+
+    This verifies that the authoring use case exposes goal_gate parameters
+    and wires them through to the Node constructor.
+    """
+    store = MagicMock()
+    store.load.return_value = _VALID_DOT
+
+    # Track the node passed to the Pipeline that is then emitted.
+    added_nodes: list[Node] = []
+
+    def _fake_emit(pipeline: Pipeline) -> str:
+        """Capture the emitted pipeline nodes."""
+        added_nodes.extend(pipeline.nodes)
+        return _VALID_DOT
+
+    serializer = MagicMock()
+    serializer.parse.return_value = Pipeline(
+        spec_id="spec",
+        nodes=[
+            Node(node_id="start", shape=NodeShape.START),
+            Node(node_id="exit", shape=NodeShape.EXIT),
+        ],
+        edges=[Edge(source_id="start", target_id="exit")],
+        stylesheet=Stylesheet(rules=[]),
+    )
+    serializer.emit.side_effect = _fake_emit
+
+    result = add_node(
+        spec_id="spec",
+        node_id="gate",
+        shape=NodeShape.CODERGEN,
+        profile="reviewer",
+        retry_target="work",
+        max_attempts=3,
+        store=store,
+        serializer=serializer,
+    )
+
+    gate_node = next((n for n in result.nodes if n.node_id == "gate"), None)
+    assert gate_node is not None, "gate node must be present in returned pipeline"
+    assert gate_node.goal_gate is not None, "goal_gate must be set when retry_target/max_attempts are provided"
+    assert gate_node.goal_gate == GoalGatePolicy(retry_target="work", max_attempts=3)

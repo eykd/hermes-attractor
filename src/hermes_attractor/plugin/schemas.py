@@ -87,6 +87,21 @@ ATTRACTOR_ADD_NODE_SCHEMA: dict[str, object] = {
                 "type": "string",
                 "description": "Optional CSS class for stylesheet styling.",
             },
+            "retry_target": {
+                "type": "string",
+                "description": (
+                    "Optional goal-gate retry target node_id. When set, this node becomes a"
+                    " goal gate: if the agent returns gate=fail, the run routes back to this"
+                    " node for another attempt."
+                ),
+            },
+            "max_attempts": {
+                "type": "integer",
+                "description": (
+                    "Optional goal-gate maximum attempt count (>= 1). Required when retry_target"
+                    " is provided. Defaults to 1 if omitted."
+                ),
+            },
             "repo_path": {
                 "type": "string",
                 "description": "Optional path to the git repository root.",

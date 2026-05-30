@@ -148,6 +148,9 @@ def handle_attractor_add_node(args: dict[str, object]) -> str:
         profile = str(args["profile"]) if args.get("profile") else None
         retry_limit = int(str(args.get("retry_limit") or 0))
         node_class = str(args["class"]) if args.get("class") else None
+        retry_target = str(args["retry_target"]) if args.get("retry_target") else None
+        max_attempts_raw = args.get("max_attempts")
+        max_attempts = int(str(max_attempts_raw)) if max_attempts_raw is not None else None
         store = _make_store(args)
         serializer = PydotSerializer()
         _ = add_node(
@@ -158,6 +161,8 @@ def handle_attractor_add_node(args: dict[str, object]) -> str:
             profile=profile,
             retry_limit=retry_limit,
             node_class=node_class,
+            retry_target=retry_target,
+            max_attempts=max_attempts,
             store=store,
             serializer=serializer,
         )

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from hermes_attractor.domain.pipeline import Edge, Node, NodeShape, Pipeline, StyleRule, Stylesheet
+from hermes_attractor.domain.pipeline import Edge, GoalGatePolicy, Node, NodeShape, Pipeline, StyleRule, Stylesheet
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -52,6 +52,8 @@ def add_node(  # noqa: PLR0913  # domain API requires all node-creation params a
     profile: str | None = None,
     retry_limit: int = 0,
     node_class: str | None = None,
+    retry_target: str | None = None,
+    max_attempts: int | None = None,
     store: PipelineStore,
     serializer: DotSerializer,
 ) -> Pipeline:
@@ -65,6 +67,10 @@ def add_node(  # noqa: PLR0913  # domain API requires all node-creation params a
         profile: Optional per-node profile override.
         retry_limit: Maximum card retries (>= 0).
         node_class: Optional stylesheet class for the node.
+        retry_target: Optional goal-gate retry target node_id; if set, a
+            GoalGatePolicy is attached to the node.
+        max_attempts: Optional goal-gate max attempts (>= 1); required when
+            ``retry_target`` is provided; defaults to 1 if omitted.
         store: PipelineStore adapter.
         serializer: DotSerializer adapter.
 
@@ -73,6 +79,12 @@ def add_node(  # noqa: PLR0913  # domain API requires all node-creation params a
     """
     dot = store.load(spec_id)
     pipeline = serializer.parse(dot)
+    goal_gate: GoalGatePolicy | None = None
+    if retry_target is not None:
+        goal_gate = GoalGatePolicy(
+            retry_target=retry_target,
+            max_attempts=max_attempts if max_attempts is not None else 1,
+        )
     new_node = Node(
         node_id=node_id,
         shape=shape,
@@ -80,6 +92,7 @@ def add_node(  # noqa: PLR0913  # domain API requires all node-creation params a
         profile=profile,
         retry_limit=retry_limit,
         node_class=node_class,
+        goal_gate=goal_gate,
     )
     updated = Pipeline(
         spec_id=pipeline.spec_id,

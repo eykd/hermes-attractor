@@ -15,7 +15,7 @@ import pydot
 
 from hermes_attractor.domain.constants import DOT_MAX_EDGES, DOT_MAX_INPUT_BYTES, DOT_MAX_NODES
 from hermes_attractor.domain.exceptions import PipelineValidationError, ValidationIssue
-from hermes_attractor.domain.pipeline import Edge, Node, NodeShape, Pipeline, StyleRule, Stylesheet
+from hermes_attractor.domain.pipeline import Edge, GoalGatePolicy, Node, NodeShape, Pipeline, StyleRule, Stylesheet
 
 #: Mapping from Graphviz DOT shape attribute to NodeShape enum value.
 _DOT_SHAPE_TO_NODE_SHAPE: dict[str, NodeShape] = {shape.value: shape for shape in NodeShape}
@@ -163,6 +163,7 @@ class PydotSerializer:
             retry_limit = int(_strip_quotes(str(retry_limit_raw)))
         except (ValueError, TypeError):  # pragma: no cover  # defensive: pydot returns strings
             retry_limit = 0
+        goal_gate = self._parse_goal_gate(attrs)
         return Node(
             node_id=node_id,
             shape=shape,
@@ -170,7 +171,33 @@ class PydotSerializer:
             profile=profile,
             retry_limit=retry_limit,
             node_class=node_class,
+            goal_gate=goal_gate,
         )
+
+    def _parse_goal_gate(self, attrs: dict[str, object]) -> GoalGatePolicy | None:
+        """Decode a GoalGatePolicy from a node's ``goal_gate`` DOT attribute.
+
+        The attribute is a base64-encoded JSON object with ``retry_target`` (str)
+        and ``max_attempts`` (int) fields. If absent or malformed, returns ``None``.
+
+        Args:
+            attrs: The pydot node attribute dict.
+
+        Returns:
+            A GoalGatePolicy decoded from the attribute, or ``None``.
+        """
+        raw = attrs.get("goal_gate")
+        if raw is None:
+            return None
+        try:
+            b64 = _strip_quotes(str(raw))
+            decoded = json.loads(base64.b64decode(b64.encode()).decode())
+            return GoalGatePolicy(
+                retry_target=str(decoded["retry_target"]),
+                max_attempts=int(decoded["max_attempts"]),
+            )
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):  # pragma: no cover  # defensive
+            return None
 
     def _parse_edge(self, pydot_edge: pydot.Edge) -> Edge:
         """Convert a pydot edge to a domain Edge.
@@ -235,6 +262,14 @@ class PydotSerializer:
             attrs["class"] = node.node_class
         if node.retry_limit != 0:
             attrs["retry_limit"] = str(node.retry_limit)
+        if node.goal_gate is not None:
+            gate_json = json.dumps(
+                {
+                    "retry_target": node.goal_gate.retry_target,
+                    "max_attempts": node.goal_gate.max_attempts,
+                }
+            )
+            attrs["goal_gate"] = base64.b64encode(gate_json.encode()).decode()
         return pydot.Node(node.node_id, **attrs)  # pyright: ignore[reportArgumentType]
 
     def _emit_edge(self, edge: Edge) -> pydot.Edge:

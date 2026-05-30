@@ -17,6 +17,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from hermes_attractor.adapters.dot_serializer import PydotSerializer
 from hermes_attractor.domain.card import CardResult
 from hermes_attractor.domain.pipeline import (
     Context,
@@ -316,4 +317,88 @@ def test_gate_missing_gate_field_treated_as_fail() -> None:
     saved_run: Run = run_state.save_run.call_args[0][0]
     assert saved_run.status is not RunStatus.SUCCEEDED, (
         "Missing gate field must not be treated as pass — run should not be SUCCEEDED"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Round-trip: DOT serialization must preserve goal_gate so routing works
+# ---------------------------------------------------------------------------
+
+
+def test_goal_gate_routing_works_through_dot_round_trip() -> None:
+    """Pipeline with a goal-gated node survives DOT round-trip with goal_gate intact.
+
+    GIVEN a pipeline with a goal-gated node built in Python
+    WHEN it is serialized to DOT and parsed back (simulating the store.load path)
+    THEN the goal_gate on the node is not None
+    AND advance_on_completion routes correctly on gate=fail (retry card created)
+
+    This is the exact gap the existing tests miss: all other goal-gate tests bypass
+    DOT by constructing Pipeline objects directly. This test exercises the real
+    production path where pipelines are stored as DOT and loaded at runtime.
+    """
+    # Build the pipeline in Python (same as _make_gate_pipeline).
+    original_pipeline = _make_gate_pipeline(max_attempts=3)
+
+    # Serialize to DOT and parse back — this simulates store.save + store.load.
+    serializer = PydotSerializer()
+    dot_str = serializer.emit(original_pipeline)
+    loaded_pipeline = serializer.parse(dot_str)
+
+    # Assert goal_gate survived the round-trip.
+    gate_node = next((n for n in loaded_pipeline.nodes if n.node_id == "gate"), None)
+    assert gate_node is not None, "gate node must be present after DOT round-trip"
+    assert gate_node.goal_gate is not None, (
+        "goal_gate must not be None after DOT round-trip — "
+        "FR-009 goal-gate retry is inert for DOT-loaded pipelines without this fix"
+    )
+    assert gate_node.goal_gate.retry_target == "work"
+    assert gate_node.goal_gate.max_attempts == 3
+
+    # Now exercise advance_on_completion with the DOT-loaded pipeline (gate=fail path).
+    run = _make_run()
+    gate_record = _make_gate_record("task-gate", attempt=1)
+    prev_work_node = RunNode(
+        run_id="run1",
+        node_id="work",
+        task_id="task-work",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=1,
+        parent_node_ids=["start"],
+    )
+
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = gate_record
+    run_state.get_run.return_value = run
+    run_state.nodes_for_run.return_value = [prev_work_node, gate_record]
+
+    kanban = MagicMock()
+    kanban.create_card.return_value = "task-retry"
+    clock = MagicMock()
+    clock.now.return_value = _LATER
+
+    card_result = CardResult(
+        task_id="task-gate",
+        event_id=2,
+        event_kind="completed",
+        summary="Gate failed.",
+        metadata={},  # no "gate" key => fail-secure
+    )
+
+    advance_on_completion(
+        card_result=card_result,
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=loaded_pipeline,  # use the DOT-loaded pipeline
+        clock=clock,
+    )
+
+    # A retry card must be created (goal gate retry routing must be active).
+    kanban.create_card.assert_called()
+    retry_card = kanban.create_card.call_args[0][0]
+    assert "work" in retry_card.idempotency_key.value, (
+        f"Retry card must target 'work' node, got key: {retry_card.idempotency_key.value}"
+    )
+    assert "attempt:2" in retry_card.idempotency_key.value, (
+        f"Retry card must have attempt:2, got: {retry_card.idempotency_key.value}"
     )

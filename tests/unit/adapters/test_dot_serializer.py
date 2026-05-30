@@ -9,7 +9,7 @@ import pytest
 
 from hermes_attractor.adapters.dot_serializer import PydotSerializer
 from hermes_attractor.domain.exceptions import PipelineValidationError
-from hermes_attractor.domain.pipeline import Edge, Node, NodeShape, Pipeline, StyleRule, Stylesheet
+from hermes_attractor.domain.pipeline import Edge, GoalGatePolicy, Node, NodeShape, Pipeline, StyleRule, Stylesheet
 from hermes_attractor.ports.dot import DotSerializer
 
 pytestmark = pytest.mark.unit
@@ -292,6 +292,71 @@ def test_pydot_serializer_roundtrip_preserves_stylesheet_with_special_chars() ->
     dot_out = serializer.emit(pipeline)
     pipeline2 = serializer.parse(dot_out)
     assert pipeline2.stylesheet.rules == tuple(rules)
+
+
+# ---------------------------------------------------------------------------
+# Empty condition normalization (bug fix: hermes-attractor-zym.44)
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# GoalGatePolicy round-trip (bug: hermes-attractor-zym.46)
+# ---------------------------------------------------------------------------
+
+
+def test_pydot_serializer_roundtrip_preserves_goal_gate_policy() -> None:
+    """emit() -> parse() preserves GoalGatePolicy on a node.
+
+    This is the critical gap: a node with a goal_gate must survive DOT serialization
+    so that DOT-loaded pipelines have functional goal-gate retry routing.
+    """
+    serializer = PydotSerializer()
+    gate_policy = GoalGatePolicy(retry_target="work", max_attempts=3)
+    pipeline = Pipeline(
+        spec_id="gate_rt_test",
+        nodes=[
+            Node(node_id="start", shape=NodeShape.START),
+            Node(node_id="work", shape=NodeShape.CODERGEN, profile="coder"),
+            Node(
+                node_id="gate",
+                shape=NodeShape.CODERGEN,
+                profile="reviewer",
+                goal_gate=gate_policy,
+            ),
+            Node(node_id="exit", shape=NodeShape.EXIT),
+        ],
+        edges=[
+            Edge(source_id="start", target_id="work"),
+            Edge(source_id="work", target_id="gate"),
+            Edge(source_id="gate", target_id="work", label="fail"),
+            Edge(source_id="gate", target_id="exit", label="pass"),
+        ],
+        stylesheet=Stylesheet(rules=[]),
+    )
+    dot_out = serializer.emit(pipeline)
+    pipeline2 = serializer.parse(dot_out)
+    gate2 = next(n for n in pipeline2.nodes if n.node_id == "gate")
+    assert gate2.goal_gate is not None, "goal_gate must not be None after DOT round-trip"
+    assert gate2.goal_gate.retry_target == "work"
+    assert gate2.goal_gate.max_attempts == 3
+
+
+def test_pydot_serializer_roundtrip_node_without_goal_gate_stays_none() -> None:
+    """emit() -> parse() correctly leaves goal_gate=None for nodes without a goal gate."""
+    serializer = PydotSerializer()
+    pipeline = Pipeline(
+        spec_id="no_gate_test",
+        nodes=[
+            Node(node_id="start", shape=NodeShape.START),
+            Node(node_id="exit", shape=NodeShape.EXIT),
+        ],
+        edges=[Edge(source_id="start", target_id="exit")],
+        stylesheet=Stylesheet(rules=[]),
+    )
+    dot_out = serializer.emit(pipeline)
+    pipeline2 = serializer.parse(dot_out)
+    for node in pipeline2.nodes:
+        assert node.goal_gate is None, f"Node {node.node_id} must have goal_gate=None, got {node.goal_gate}"
 
 
 # ---------------------------------------------------------------------------
