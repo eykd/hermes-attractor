@@ -577,7 +577,9 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
             profile = pipeline.resolve_profile(next_node) or ""
             prompt_template = next_node.prompt or ""
             body = _expand_prompt(prompt_template, run.context.data)
-            attempt = node_record.attempt + 1 if next_node.node_id == node_record.node_id else 1
+            all_nodes_for_human = run_state.nodes_for_run(run.run_id)
+            human_prev_count = sum(1 for n in all_nodes_for_human if n.node_id == next_node.node_id)
+            attempt = human_prev_count + 1
             key = IdempotencyKey.for_node(run.run_id, next_node.node_id, attempt)
             card = Card(
                 idempotency_key=key,
