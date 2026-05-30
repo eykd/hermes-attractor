@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from hermes_attractor.domain.constants import EVENT_LOG_BATCH_SIZE
 from hermes_attractor.domain.run import RunStatus
 
 if TYPE_CHECKING:
@@ -166,31 +167,58 @@ def _reconcile_run(  # noqa: PLR0913
         advance_fn: Callable that advances the run state machine for one
             completion event.
     """
-    events = event_log.read_since(last_seen_event_id)
-    if not events:
-        return
+    # Load the pipeline once for all batches (immutable for this run).
+    pipeline_loaded = False
+    pipeline = None
 
-    # Filter to events that belong to this run.
-    # The EventLog is global; we must resolve each event's owning run via
-    # get_node_by_task before dispatching to avoid cross-run cursor contamination
-    # (FR-024 / SC-003).
-    owned_events = [
-        card_result
-        for card_result in events
-        if (node := run_state.get_node_by_task(card_result.task_id)) is not None and node.run_id == run_id
-    ]
-    if not owned_events:
-        return
+    # Loop in bounded batches (plan.md §Bounded event-log replay).
+    # Each iteration reads at most EVENT_LOG_BATCH_SIZE events from the cursor.
+    # We continue looping while the returned batch is full (suggesting more events
+    # remain), re-reading the updated cursor from the store before each iteration.
+    cursor = last_seen_event_id
+    while True:
+        events = event_log.read_since(cursor)
+        if not events:
+            break
 
-    # Load the pipeline once for this run's batch.
-    dot = store.load(spec_id)
-    pipeline = serializer.parse(dot)
+        # Filter to events that belong to this run.
+        # The EventLog is global; we must resolve each event's owning run via
+        # get_node_by_task before dispatching to avoid cross-run cursor contamination
+        # (FR-024 / SC-003).
+        owned_events = [
+            card_result
+            for card_result in events
+            if (node := run_state.get_node_by_task(card_result.task_id)) is not None and node.run_id == run_id
+        ]
 
-    for card_result in owned_events:
-        advance_fn(
-            card_result=card_result,
-            kanban=kanban,
-            run_state=run_state,
-            pipeline=pipeline,
-            clock=clock,
-        )
+        if owned_events:
+            # Load the pipeline lazily on the first batch that has owned events.
+            if not pipeline_loaded:
+                dot = store.load(spec_id)
+                pipeline = serializer.parse(dot)
+                pipeline_loaded = True
+
+            # pipeline is guaranteed non-None here: pipeline_loaded is True and
+            # pipeline was assigned on the same branch that set pipeline_loaded.
+            assert pipeline is not None  # noqa: S101  # invariant guard
+            for card_result in owned_events:
+                advance_fn(
+                    card_result=card_result,
+                    kanban=kanban,
+                    run_state=run_state,
+                    pipeline=pipeline,
+                    clock=clock,
+                )
+
+        # Stop if the batch was partial (fewer than EVENT_LOG_BATCH_SIZE events
+        # returned means we've exhausted the log up to now).
+        if len(events) < EVENT_LOG_BATCH_SIZE:
+            break
+
+        # Full batch returned: more events may remain. Re-read the cursor from the
+        # store (advance_fn may have advanced it via save_run) before next iteration.
+        current_run = run_state.get_run(run_id)
+        if current_run is None:
+            _log.warning("reconcile: run %s disappeared during batch loop", run_id)
+            break
+        cursor = current_run.last_seen_event_id

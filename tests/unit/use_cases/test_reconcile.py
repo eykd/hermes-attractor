@@ -5,12 +5,18 @@ Tests fail until src/hermes_attractor/use_cases/reconcile.py is implemented.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
 import pytest
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
 from hermes_attractor.domain.card import CardResult
+from hermes_attractor.domain.constants import EVENT_LOG_BATCH_SIZE
 from hermes_attractor.domain.pipeline import (
     Context,
     Edge,
@@ -582,3 +588,228 @@ def test_reconcile_skips_events_that_belong_to_other_runs() -> None:
     # No events belong to run-A, so pipeline should never be loaded.
     store.load.assert_not_called()
     assert advance_calls == [], "advance_fn must not be called for foreign-run events"
+
+
+def test_reconcile_processes_all_events_when_backlog_exceeds_one_batch() -> None:
+    """_reconcile_run loops over multiple batches when the event backlog > EVENT_LOG_BATCH_SIZE.
+
+    The plan spec (plan.md §Bounded event-log replay) requires looping in bounded
+    batches of EVENT_LOG_BATCH_SIZE events, advancing the cursor after each batch.
+    This test verifies that a backlog of EVENT_LOG_BATCH_SIZE + 50 events (150 total)
+    is fully processed in a single ``reconcile`` call — i.e. that _reconcile_run
+    does NOT stop after the first batch of 100.
+
+    Setup:
+    - One active run with cursor at 0.
+    - event_log.read_since is a stateful fake:
+        * First call (cursor=0): returns events 1-100 (full batch of EVENT_LOG_BATCH_SIZE).
+        * Second call (cursor=100): returns events 101-150 (partial batch, 50 events).
+        * Third call (cursor=150): returns [] (no more events — loop termination).
+    - Each event has a unique task_id, and get_node_by_task maps it to the run.
+    - advance_fn is a spy that tracks call count.
+
+    Assertion: advance_fn is called exactly EVENT_LOG_BATCH_SIZE + 50 = 150 times,
+    proving that all events from the tail batch were processed.
+    """
+    pipeline = _make_pipeline()
+    run = _make_run(last_seen_event_id=0)
+
+    # Build 150 events: IDs 1..150, each with a unique task_id.
+    total_events = EVENT_LOG_BATCH_SIZE + 50  # 150
+    all_events: list[CardResult] = [
+        CardResult(
+            task_id=f"task-{i:04d}",
+            event_id=i,
+            event_kind="completed",
+            summary=f"Done {i}",
+            metadata={},
+        )
+        for i in range(1, total_events + 1)
+    ]
+    batch_1 = all_events[:EVENT_LOG_BATCH_SIZE]  # events 1..100
+    batch_2 = all_events[EVENT_LOG_BATCH_SIZE:]  # events 101..150
+    assert len(batch_1) == EVENT_LOG_BATCH_SIZE
+    assert len(batch_2) == 50
+
+    # Map every task_id to a RunNode owned by run1.
+    task_id_to_node: dict[str, RunNode] = {
+        event.task_id: _make_run_node(run_id="run1", node_id="work", task_id=event.task_id) for event in all_events
+    }
+
+    run_state = MagicMock()
+    run_state.active_runs.return_value = [run]
+
+    # get_run returns the run object; updated cursor is stored via save_run.
+    # For the loop to re-read the cursor it needs get_run to return the updated run.
+    # We simulate the advancing cursor by tracking the last saved run.
+    saved_run_ref: list[Run] = [run]
+
+    def _get_run(run_id: str) -> Run:
+        """Return the most recently saved version of the run."""
+        return saved_run_ref[0]
+
+    def _save_run(r: Run) -> None:
+        """Update the saved run reference so the loop sees the new cursor."""
+        saved_run_ref[0] = r
+
+    run_state.get_run.side_effect = _get_run
+    run_state.save_run.side_effect = _save_run
+    run_state.get_node_by_task.side_effect = task_id_to_node.get
+    run_state.nodes_for_run.return_value = list(task_id_to_node.values())
+
+    # Stateful fake: returns batch_1 then batch_2 then [] based on cursor.
+    def _read_since(last_seen_event_id: int) -> Sequence[CardResult]:
+        """Return the appropriate batch for the given cursor position."""
+        if last_seen_event_id < EVENT_LOG_BATCH_SIZE:
+            return batch_1
+        if last_seen_event_id < total_events:
+            return batch_2
+        return []
+
+    event_log = MagicMock()
+    event_log.read_since.side_effect = _read_since
+
+    kanban = MagicMock()
+    kanban.create_card.return_value = "task-next"
+
+    serializer = MagicMock()
+    serializer.parse.return_value = pipeline
+
+    store = MagicMock()
+    store.load.return_value = "digraph spec-a {}"
+
+    clock = MagicMock()
+    clock.now.return_value = _LATER
+
+    advance_call_count: list[int] = [0]
+
+    def _counting_advance_fn(
+        *,
+        card_result: CardResult,
+        kanban: object,
+        run_state: object,
+        pipeline: Pipeline,
+        clock: object,
+    ) -> None:
+        """Count advance calls and update the run cursor to simulate real advance."""
+        advance_call_count[0] += 1
+        # Simulate cursor advancement: update saved_run_ref with new last_seen_event_id.
+        current = saved_run_ref[0]
+        updated = dataclasses.replace(current, last_seen_event_id=card_result.event_id)
+        saved_run_ref[0] = updated
+
+    reconcile(
+        run_state=run_state,
+        event_log=event_log,
+        serializer=serializer,
+        store=store,
+        kanban=kanban,
+        clock=clock,
+        advance_fn=_counting_advance_fn,
+    )
+
+    assert advance_call_count[0] == total_events, (
+        f"Expected advance_fn to be called {total_events} times (all events), "
+        f"but was called {advance_call_count[0]} times. "
+        f"Events in tail batch (IDs {EVENT_LOG_BATCH_SIZE + 1}-{total_events}) "
+        f"are silently dropped when _reconcile_run reads only one batch."
+    )
+
+
+def test_reconcile_stops_batch_loop_gracefully_when_run_disappears_mid_loop() -> None:
+    """_reconcile_run stops gracefully if the run disappears between batches.
+
+    When a full batch is returned (suggesting more events remain), the loop
+    re-reads the cursor via get_run. If the run has been deleted between the
+    first batch and the cursor re-read, _reconcile_run must stop without
+    raising and without calling advance_fn a second time.
+
+    Setup:
+    - One active run with cursor at 0.
+    - First call to read_since returns a full batch (EVENT_LOG_BATCH_SIZE events).
+    - get_run returns the run for the initial re-read, then None on the second
+      call (simulating deletion mid-loop).
+    - advance_fn is a spy.
+
+    Assertion: advance_fn is called exactly EVENT_LOG_BATCH_SIZE times (first
+    batch only), and the function returns normally (no exception raised).
+    """
+    pipeline = _make_pipeline()
+    run = _make_run(last_seen_event_id=0)
+
+    full_batch: list[CardResult] = [
+        CardResult(
+            task_id=f"task-{i:04d}",
+            event_id=i,
+            event_kind="completed",
+            summary=f"Done {i}",
+            metadata={},
+        )
+        for i in range(1, EVENT_LOG_BATCH_SIZE + 1)
+    ]
+
+    task_id_to_node: dict[str, RunNode] = {
+        event.task_id: _make_run_node(run_id="run1", node_id="work", task_id=event.task_id) for event in full_batch
+    }
+
+    # get_run: first call returns run (initial snapshot re-read in reconcile()),
+    # second call (after first batch for cursor re-read) returns None.
+    get_run_calls: list[int] = [0]
+
+    def _get_run(run_id: str) -> Run | None:
+        """Return run on first call, None on second (simulating deletion)."""
+        get_run_calls[0] += 1
+        if get_run_calls[0] <= 1:
+            return run
+        return None
+
+    run_state = MagicMock()
+    run_state.active_runs.return_value = [run]
+    run_state.get_run.side_effect = _get_run
+    run_state.get_node_by_task.side_effect = task_id_to_node.get
+    run_state.nodes_for_run.return_value = list(task_id_to_node.values())
+
+    # Only one batch returned; second call would return [] but should never be reached.
+    event_log = MagicMock()
+    event_log.read_since.return_value = full_batch
+
+    kanban = MagicMock()
+    kanban.create_card.return_value = "task-next"
+
+    serializer = MagicMock()
+    serializer.parse.return_value = pipeline
+
+    store = MagicMock()
+    store.load.return_value = "digraph spec-a {}"
+
+    clock = MagicMock()
+    clock.now.return_value = _LATER
+
+    advance_call_count: list[int] = [0]
+
+    def _counting_advance_fn(
+        *,
+        card_result: CardResult,
+        kanban: object,
+        run_state: object,
+        pipeline: Pipeline,
+        clock: object,
+    ) -> None:
+        """Count advance calls."""
+        advance_call_count[0] += 1
+
+    # Must not raise even though the run disappears after the first batch.
+    reconcile(
+        run_state=run_state,
+        event_log=event_log,
+        serializer=serializer,
+        store=store,
+        kanban=kanban,
+        clock=clock,
+        advance_fn=_counting_advance_fn,
+    )
+
+    assert advance_call_count[0] == EVENT_LOG_BATCH_SIZE, (
+        f"Expected advance_fn called {EVENT_LOG_BATCH_SIZE} times for the first batch, "
+        f"but was called {advance_call_count[0]} times."
+    )
