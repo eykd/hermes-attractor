@@ -620,3 +620,64 @@ def test_pipeline_validate_tool_to_non_tool_is_valid() -> None:
     pipeline = Pipeline(spec_id="tool_non_tool", nodes=nodes, edges=edges, stylesheet=Stylesheet(rules=[]))
     issues = pipeline.validate()
     assert issues == [], f"Expected no issues for TOOL -> non-TOOL pipeline, got: {issues}"
+
+
+# ---------------------------------------------------------------------------
+# Guard-content validation (hermes-attractor-zym.44)
+# ---------------------------------------------------------------------------
+
+
+def _make_pipeline_with_condition(condition: str) -> Pipeline:
+    """Build a minimal two-node pipeline with the given edge condition string.
+
+    Args:
+        condition: The guard condition string to attach to the edge.
+
+    Returns:
+        A Pipeline with start -> exit edge carrying the given condition.
+    """
+    nodes = [
+        Node(node_id="start", shape=NodeShape.START),
+        Node(node_id="exit", shape=NodeShape.EXIT),
+    ]
+    edges = [Edge(source_id="start", target_id="exit", condition=condition)]
+    return Pipeline(spec_id="guard_test", nodes=nodes, edges=edges, stylesheet=Stylesheet(rules=[]))
+
+
+def test_pipeline_validate_rejects_empty_string_condition() -> None:
+    """Pipeline.validate() reports a ValidationIssue for an edge whose condition is an empty string.
+
+    An empty condition string is not a valid guard expression — evaluate("", ctx) raises
+    PipelineValidationError. The validate() method must surface this at pipeline-definition
+    time so that a bad condition is rejected before the run starts.
+    """
+    pipeline = _make_pipeline_with_condition("")
+    issues = pipeline.validate()
+    assert issues, "Expected at least one issue for an empty-string edge condition"
+    element_ids = [issue.element_id for issue in issues]
+    assert any("start" in eid or "exit" in eid or "guard" in eid or "condition" in eid for eid in element_ids), (
+        f"Expected an issue referencing the guard condition or edge: {issues}"
+    )
+
+
+def test_pipeline_validate_rejects_malformed_condition() -> None:
+    """Pipeline.validate() reports a ValidationIssue for an edge with an unparseable guard condition.
+
+    A condition like '===' contains characters the guard language cannot parse. validate()
+    must catch this at validation time (not at run time) so the pipeline author receives a
+    clear error rather than a stalled run cursor.
+    """
+    pipeline = _make_pipeline_with_condition("=== bad guard ===")
+    issues = pipeline.validate()
+    assert issues, "Expected at least one issue for a malformed edge condition"
+
+
+def test_pipeline_validate_accepts_valid_condition() -> None:
+    r"""Pipeline.validate() accepts an edge whose condition is a syntactically valid guard expression.
+
+    A condition like 'status == "done"' parses successfully; validate() must NOT emit a
+    ValidationIssue for it.
+    """
+    pipeline = _make_pipeline_with_condition('status == "done"')
+    issues = pipeline.validate()
+    assert issues == [], f"Expected no issues for a valid edge condition, got: {issues}"

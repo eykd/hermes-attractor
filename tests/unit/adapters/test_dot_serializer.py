@@ -292,3 +292,30 @@ def test_pydot_serializer_roundtrip_preserves_stylesheet_with_special_chars() ->
     dot_out = serializer.emit(pipeline)
     pipeline2 = serializer.parse(dot_out)
     assert pipeline2.stylesheet.rules == tuple(rules)
+
+
+# ---------------------------------------------------------------------------
+# Empty condition normalization (bug fix: hermes-attractor-zym.44)
+# ---------------------------------------------------------------------------
+
+
+def test_pydot_serializer_parse_edge_with_empty_condition_string_yields_none() -> None:
+    """DOT edge with condition="" normalizes to condition=None, not condition="".
+
+    pydot returns the attribute as '""', which _strip_quotes converts to an empty
+    string. The parser must treat an empty stripped condition as None (unconditioned)
+    rather than passing the empty string to the Edge constructor.
+    """
+    dot = """
+digraph test {
+    start [shape=Mdiamond];
+    exit [shape=Msquare];
+    start -> exit [condition=""];
+}
+""".strip()
+    serializer = PydotSerializer()
+    pipeline = serializer.parse(dot)
+    edge = next(iter(pipeline.edges))
+    assert edge.condition is None, (
+        f"Expected edge.condition to be None for an empty DOT condition attribute, got {edge.condition!r}"
+    )

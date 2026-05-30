@@ -185,7 +185,8 @@ class PydotSerializer:
         target_id = _strip_quotes(str(pydot_edge.get_destination()))
         attrs = pydot_edge.get_attributes()
         condition_raw = attrs.get("condition")
-        condition = _strip_quotes(condition_raw) if condition_raw else None
+        stripped_condition = _strip_quotes(condition_raw) if condition_raw else None
+        condition = stripped_condition if stripped_condition else None
         label_raw = attrs.get("label")
         label = _strip_quotes(label_raw) if label_raw else None
         weight_raw = attrs.get("weight", "0")

@@ -14,7 +14,8 @@ import enum
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
-from hermes_attractor.domain.exceptions import ValidationIssue
+from hermes_attractor.domain.exceptions import PipelineValidationError, ValidationIssue
+from hermes_attractor.domain.guard import evaluate
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -317,6 +318,7 @@ class Pipeline:
         issues.extend(self._validate_goal_gates(node_ids, reachable))
         issues.extend(self._validate_profiles())
         issues.extend(self._validate_tool_edges())
+        issues.extend(self._validate_guards())
         return issues
 
     def _validate_structure(self, start_nodes: list[Node]) -> list[ValidationIssue]:
@@ -460,6 +462,36 @@ class Pipeline:
             for edge in self.edges
             if edge.source_id in tool_node_ids and edge.target_id in tool_node_ids
         ]
+
+    def _validate_guards(self) -> list[ValidationIssue]:
+        """Check that all non-None edge condition strings are syntactically valid guard expressions.
+
+        Attempts to parse each condition with an empty context. A condition that raises
+        PipelineValidationError (empty string, unknown token, or structurally invalid) is
+        reported as a ValidationIssue so the problem surfaces at validation time rather than
+        stalling a live run cursor.
+
+        Returns:
+            List of ValidationIssue for edges whose condition string fails to parse.
+        """
+        issues: list[ValidationIssue] = []
+        for edge in self.edges:
+            if edge.condition is None:
+                continue
+            try:
+                _ = evaluate(edge.condition, {})
+            except PipelineValidationError as exc:
+                reason = exc.issues[0].reason if exc.issues else str(exc)
+                issues.append(
+                    ValidationIssue(
+                        element_id=edge.source_id,
+                        reason=(
+                            f"Edge '{edge.source_id}' -> '{edge.target_id}' has an invalid"
+                            f" condition expression: {reason}"
+                        ),
+                    )
+                )
+        return issues
 
     def _validate_profiles(self) -> list[ValidationIssue]:
         """Check that all worker nodes have a resolved profile.
