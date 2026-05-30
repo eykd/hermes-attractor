@@ -2620,7 +2620,7 @@ def test_fan_in_merge_scalar_conflict_no_duplication() -> None:
         "Expected _merge_conflicts in merged context because both branches wrote 'result'; "
         f"context.data={dict(final_run.context.data)!r}"
     )
-    result_conflict = conflicts["result"]  # type: ignore[index]
+    result_conflict = conflicts["result"]  # pyright: ignore[reportIndexIssue, reportUnknownVariableType]
     assert result_conflict == ["alpha", "beta"], (
         f"Bug: FAN_IN double-applies branch context_updates; "
         f"expected conflict=['alpha','beta'] (each branch once), got {result_conflict!r}. "

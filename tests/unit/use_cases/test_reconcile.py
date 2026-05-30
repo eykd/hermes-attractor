@@ -573,7 +573,7 @@ def test_reconcile_skips_events_that_belong_to_other_runs() -> None:
         """Record any advance call (should never be called here)."""
         result = kwargs.get("card_result")
         if hasattr(result, "task_id"):
-            advance_calls.append(str(result.task_id))  # type: ignore[union-attr]
+            advance_calls.append(str(result.task_id))  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess, reportUnknownMemberType, reportUnknownArgumentType]
 
     reconcile(
         run_state=run_state,
