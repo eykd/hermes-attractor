@@ -2071,3 +2071,314 @@ def test_gate_retry_crash_replay_does_not_create_duplicate_retry_row() -> None:
     assert second_key == first_key, (
         f"Replay must produce the same idempotency key; first={first_key!r}, second={second_key!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Routing: preferred_label / suggested_next propagation (FR-007 / SC-006)
+# ---------------------------------------------------------------------------
+
+
+def _make_branching_pipeline() -> Pipeline:
+    """Build a pipeline with a node that has two labeled outgoing edges.
+
+    Topology: start -> router -> branch_a (label='a'), router -> branch_b (label='b') -> exit
+
+    The ``router`` node is a plain CODERGEN node (not a gate) so that the agent
+    can influence routing via ``preferred_label`` / ``suggested_next`` in metadata.
+    """
+    start = Node(node_id="start", shape=NodeShape.START)
+    router = Node(node_id="router", shape=NodeShape.CODERGEN, profile="coder")
+    branch_a = Node(node_id="branch_a", shape=NodeShape.CODERGEN, profile="coder")
+    branch_b = Node(node_id="branch_b", shape=NodeShape.CODERGEN, profile="coder")
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    edges = [
+        Edge(source_id="start", target_id="router"),
+        Edge(source_id="router", target_id="branch_a", label="a"),
+        Edge(source_id="router", target_id="branch_b", label="b"),
+        Edge(source_id="branch_a", target_id="exit"),
+        Edge(source_id="branch_b", target_id="exit"),
+    ]
+    stylesheet = Stylesheet(rules=[StyleRule(selector="*", profile="coder")])
+    return Pipeline(
+        spec_id="branching-pipeline",
+        nodes=[start, router, branch_a, branch_b, exit_],
+        edges=edges,
+        stylesheet=stylesheet,
+    )
+
+
+def test_advance_on_completion_preferred_label_routes_non_gate_node() -> None:
+    """When a non-gate node's CardResult metadata contains preferred_label, the run follows that edge label.
+
+    Without the fix, routing_hint is hardcoded to 'pass' for non-gate nodes, so preferred_label
+    in the metadata is silently ignored and the engine routes by weight/lexical instead.
+    """
+    pipeline = _make_branching_pipeline()
+    run = Run(
+        run_id="run-routing",
+        spec_id="branching-pipeline",
+        status=RunStatus.RUNNING,
+        context=Context(data={}),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    router_node = RunNode(
+        run_id="run-routing",
+        node_id="router",
+        task_id="task-router",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=["start"],
+    )
+
+    dispatched: list[RunNode] = []
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = router_node
+    run_state.get_run.return_value = run
+    run_state.nodes_for_run.return_value = [router_node]
+    run_state.upsert_node.side_effect = dispatched.append
+    kanban = MagicMock()
+    kanban.create_card.return_value = "task-branch-b"
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    # Agent emits preferred_label='b' to route to branch_b instead of the default (branch_a, lexically first).
+    card_result = CardResult(
+        task_id="task-router",
+        event_id=1,
+        event_kind="completed",
+        summary="Routing to b.",
+        metadata={"preferred_label": "b"},
+    )
+
+    advance_on_completion(
+        card_result=card_result,
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    # The dispatched next node must be branch_b, not branch_a.
+    assert dispatched, "Expected a next node to be dispatched"
+    next_node = dispatched[-1]
+    assert next_node.node_id == "branch_b", (
+        f"Expected branch_b (preferred_label='b'), but got {next_node.node_id!r}. "
+        "Bug: preferred_label from CardResult.metadata is not passed to select_edge as routing_hint."
+    )
+
+
+def test_advance_on_completion_suggested_next_routes_non_gate_node() -> None:
+    """When a non-gate node's CardResult metadata contains suggested_next, the run prefers that target node.
+
+    Without the fix, suggested_nodes=[] is always passed to select_edge, so the agent's
+    suggested_next is silently ignored.
+    """
+    pipeline = _make_branching_pipeline()
+    run = Run(
+        run_id="run-suggest",
+        spec_id="branching-pipeline",
+        status=RunStatus.RUNNING,
+        context=Context(data={}),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    router_node = RunNode(
+        run_id="run-suggest",
+        node_id="router",
+        task_id="task-router-s",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=["start"],
+    )
+
+    dispatched: list[RunNode] = []
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = router_node
+    run_state.get_run.return_value = run
+    run_state.nodes_for_run.return_value = [router_node]
+    run_state.upsert_node.side_effect = dispatched.append
+    kanban = MagicMock()
+    kanban.create_card.return_value = "task-branch-b-s"
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    # Agent emits suggested_next='branch_b' to prefer branch_b over branch_a (lexically first, lower weight).
+    # Since both edges have the same weight and no label match, suggested_next should be the tiebreaker.
+    card_result = CardResult(
+        task_id="task-router-s",
+        event_id=2,
+        event_kind="completed",
+        summary="Suggesting branch_b.",
+        metadata={"suggested_next": "branch_b"},
+    )
+
+    advance_on_completion(
+        card_result=card_result,
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    assert dispatched, "Expected a next node to be dispatched"
+    next_node = dispatched[-1]
+    assert next_node.node_id == "branch_b", (
+        f"Expected branch_b (suggested_next='branch_b'), but got {next_node.node_id!r}. "
+        "Bug: suggested_next from CardResult.metadata is not passed to select_edge as suggested_nodes."
+    )
+
+
+def test_advance_on_completion_gate_pass_uses_gate_verdict_not_preferred_label() -> None:
+    """For a gate node that passes, routing_hint comes from the gate verdict ('pass'), not preferred_label.
+
+    This ensures gate routing remains secure (fail-secure per plan.md §Security) and is not
+    overridden by an agent-supplied preferred_label in the metadata.
+    """
+    # Build a gate pipeline: work -> gate -> pass_node (label='pass'), gate -> fail_node (label='fail')
+    start = Node(node_id="start", shape=NodeShape.START)
+    work = Node(node_id="work", shape=NodeShape.CODERGEN, profile="coder")
+    gate = Node(
+        node_id="gate",
+        shape=NodeShape.CODERGEN,
+        profile="reviewer",
+        goal_gate=GoalGatePolicy(retry_target="work", max_attempts=3),
+    )
+    pass_node = Node(node_id="pass_node", shape=NodeShape.CODERGEN, profile="coder")
+    fail_node = Node(node_id="fail_node", shape=NodeShape.CODERGEN, profile="coder")
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    gate_pipeline = Pipeline(
+        spec_id="gate-routing-pipeline",
+        nodes=[start, work, gate, pass_node, fail_node, exit_],
+        edges=[
+            Edge(source_id="start", target_id="work"),
+            Edge(source_id="work", target_id="gate"),
+            Edge(source_id="gate", target_id="pass_node", label="pass"),
+            Edge(source_id="gate", target_id="fail_node", label="fail"),
+            Edge(source_id="pass_node", target_id="exit"),
+            Edge(source_id="fail_node", target_id="exit"),
+        ],
+        stylesheet=Stylesheet(rules=[StyleRule(selector="*", profile="coder")]),
+    )
+
+    run = Run(
+        run_id="run-gate-routing",
+        spec_id="gate-routing-pipeline",
+        status=RunStatus.RUNNING,
+        context=Context(data={}),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    work_succeeded = RunNode(
+        run_id="run-gate-routing",
+        node_id="work",
+        task_id="task-work",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=1,
+        parent_node_ids=["start"],
+    )
+    gate_node = RunNode(
+        run_id="run-gate-routing",
+        node_id="gate",
+        task_id="task-gate",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=["work"],
+        goal_gate_policy=GoalGatePolicy(retry_target="work", max_attempts=3),
+    )
+
+    dispatched: list[RunNode] = []
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = gate_node
+    run_state.get_run.return_value = run
+    run_state.nodes_for_run.return_value = [work_succeeded, gate_node]
+    run_state.upsert_node.side_effect = dispatched.append
+    kanban = MagicMock()
+    kanban.create_card.return_value = "task-pass-node"
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    # Gate passes (gate verdict in metadata), agent also supplies preferred_label='fail'
+    # (adversarial: trying to override gate routing). The gate verdict must win.
+    card_result = CardResult(
+        task_id="task-gate",
+        event_id=3,
+        event_kind="completed",
+        summary="Gate passed.",
+        metadata={"gate": "pass", "preferred_label": "fail"},
+    )
+
+    advance_on_completion(
+        card_result=card_result,
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=gate_pipeline,
+        clock=clock,
+    )
+
+    # Must route to pass_node, not fail_node — gate verdict wins over preferred_label.
+    assert dispatched, "Expected a next node to be dispatched after gate pass"
+    next_node = dispatched[-1]
+    assert next_node.node_id == "pass_node", (
+        f"Expected pass_node (gate verdict='pass'), but got {next_node.node_id!r}. "
+        "Bug: gate routing must use gate verdict, not preferred_label from metadata."
+    )
+
+
+def test_advance_on_completion_suggested_next_as_list_routes_non_gate_node() -> None:
+    """When suggested_next in metadata is a list, the first matching target node is preferred.
+
+    Tests the list form of suggested_next: ``{"suggested_next": ["branch_b"]}``.
+    """
+    pipeline = _make_branching_pipeline()
+    run = Run(
+        run_id="run-suggest-list",
+        spec_id="branching-pipeline",
+        status=RunStatus.RUNNING,
+        context=Context(data={}),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    router_node = RunNode(
+        run_id="run-suggest-list",
+        node_id="router",
+        task_id="task-router-list",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=["start"],
+    )
+
+    dispatched: list[RunNode] = []
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = router_node
+    run_state.get_run.return_value = run
+    run_state.nodes_for_run.return_value = [router_node]
+    run_state.upsert_node.side_effect = dispatched.append
+    kanban = MagicMock()
+    kanban.create_card.return_value = "task-branch-b-list"
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    # Agent supplies suggested_next as a list (multi-candidate form).
+    card_result = CardResult(
+        task_id="task-router-list",
+        event_id=4,
+        event_kind="completed",
+        summary="Suggesting branch_b via list.",
+        metadata={"suggested_next": ["branch_b"]},
+    )
+
+    advance_on_completion(
+        card_result=card_result,
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    assert dispatched, "Expected a next node to be dispatched"
+    next_node = dispatched[-1]
+    assert next_node.node_id == "branch_b", (
+        f"Expected branch_b (suggested_next=['branch_b']), but got {next_node.node_id!r}. "
+        "Bug: suggested_next as list is not passed to select_edge as suggested_nodes."
+    )

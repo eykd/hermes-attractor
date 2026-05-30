@@ -139,10 +139,6 @@ def test_sp_pipeline_validates_clean() -> None:
     assert issues == [], f"Expected no validation issues, got: {issues}"
 
 
-@pytest.mark.xfail(
-    reason="US8 end-to-end sp run requires complete orchestration (complex state machine simulation)",
-    strict=True,
-)
 def test_sp_pipeline_runs_end_to_end_to_succeeded() -> None:  # noqa: PLR0915, C901
     """The sp pipeline runs end-to-end through all node types and reaches SUCCEEDED.
 
@@ -174,7 +170,11 @@ def test_sp_pipeline_runs_end_to_end_to_succeeded() -> None:  # noqa: PLR0915, C
 
     def _upsert_node(node: RunNode) -> None:
         idx = next(
-            (i for i, n in enumerate(nodes) if n.run_id == node.run_id and n.node_id == node.node_id),
+            (
+                i
+                for i, n in enumerate(nodes)
+                if n.run_id == node.run_id and n.node_id == node.node_id and n.attempt == node.attempt
+            ),
             None,
         )
         if idx is not None:

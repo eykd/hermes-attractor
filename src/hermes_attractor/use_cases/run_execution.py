@@ -485,9 +485,29 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
 
     # FAN_IN: check if all predecessor branches have completed before dispatching.
     # Select the next edge.
-    routing_hint: str | None = "pass" if gate_passed else "fail"
+    #
+    # Routing hint and suggested nodes (FR-007 / SC-006):
+    # - For gate nodes: routing_hint is derived from the gate verdict ("pass" or "fail"),
+    #   NOT from the agent-supplied preferred_label, for fail-secure gate routing.
+    # - For non-gate nodes: routing_hint comes from the agent's preferred_label in metadata
+    #   (None if not supplied — no spurious "pass" label match on unlabeled edges).
+    # - suggested_nodes: agent-supplied suggested_next from metadata (single str or list[str]).
+    #   Always passed through regardless of node type.
+    raw_preferred_label = card_result.metadata.get("preferred_label")
+    agent_preferred_label: str | None = raw_preferred_label if isinstance(raw_preferred_label, str) else None
+    raw_suggested_next = card_result.metadata.get("suggested_next")
+    if isinstance(raw_suggested_next, str):
+        agent_suggested_nodes: list[str] = [raw_suggested_next]
+    elif isinstance(raw_suggested_next, list):
+        raw_list = cast("list[object]", raw_suggested_next)
+        agent_suggested_nodes = [item for item in raw_list if isinstance(item, str)]
+    else:
+        agent_suggested_nodes = []
+    routing_hint: str | None = ("pass" if gate_passed else "fail") if is_gate else agent_preferred_label
     out_edges = [e for e in pipeline.edges if e.source_id == node_record.node_id]
-    next_edge = select_edge(out_edges, context=dict(run.context.data), routing_hint=routing_hint, suggested_nodes=[])
+    next_edge = select_edge(
+        out_edges, context=dict(run.context.data), routing_hint=routing_hint, suggested_nodes=agent_suggested_nodes
+    )
     # When the next node is FAN_IN, only dispatch after all branches are done.
     #
     # BATCH-BOUNDARY SAFETY INVARIANT: each branch completion is a **durable write**
