@@ -813,3 +813,108 @@ def test_reconcile_stops_batch_loop_gracefully_when_run_disappears_mid_loop() ->
         f"Expected advance_fn called {EVENT_LOG_BATCH_SIZE} times for the first batch, "
         f"but was called {advance_call_count[0]} times."
     )
+
+
+def test_reconcile_terminates_when_full_batch_is_all_foreign_run_events() -> None:
+    """_reconcile_run must not hang when a full batch contains only foreign-run events.
+
+    Regression test for the zym.48 DoS bug: when read_since returns a FULL batch
+    (EVENT_LOG_BATCH_SIZE events) that ALL belong to other runs, owned_events is
+    empty, advance_fn is never called, save_run is never called, and the persisted
+    cursor never advances.  The pre-fix code then re-reads the same cursor on the
+    next iteration and gets the same full foreign batch forever — an infinite loop.
+
+    The fix must advance a LOCAL read cursor past max(event_id) in every batch,
+    even when owned_events is empty, so foreign-event batches make forward progress.
+
+    Setup:
+    - One active run-A with cursor at 0.
+    - event_log.read_since is stateful:
+        * First call  (cursor=0):   returns FULL batch of EVENT_LOG_BATCH_SIZE events,
+          all belonging to run-B (foreign), with event_ids 1..EVENT_LOG_BATCH_SIZE.
+        * Second call (cursor=EVENT_LOG_BATCH_SIZE):  returns [] (end of log).
+    - get_node_by_task always resolves to a run-B node (not run-A).
+    - advance_fn is a spy that fails the test if ever called (no owned events).
+    - get_run is called only once (for the initial re-read in reconcile()), because
+      the inner loop must NOT call get_run when no owned events advanced the cursor.
+
+    Assertions:
+    - reconcile() returns (does not hang).
+    - advance_fn is never called.
+    - read_since is called exactly twice (cursor=0 then cursor=100).
+    - The persisted cursor (save_run) is never called (no owned events to advance).
+    """
+    run_a = _make_run(run_id="run-a", spec_id="spec-a", last_seen_event_id=0)
+    node_b = _make_run_node(run_id="run-b", node_id="work", task_id="irrelevant")
+
+    # Full batch of EVENT_LOG_BATCH_SIZE foreign events (all belong to run-b).
+    foreign_batch: list[CardResult] = [
+        CardResult(
+            task_id=f"task-b-{i:04d}",
+            event_id=i,
+            event_kind="completed",
+            summary=f"B done {i}",
+            metadata={},
+        )
+        for i in range(1, EVENT_LOG_BATCH_SIZE + 1)
+    ]
+    assert len(foreign_batch) == EVENT_LOG_BATCH_SIZE, "batch must be exactly full"
+
+    # Stateful fake: first call returns full foreign batch, second returns [].
+    read_since_calls: list[int] = []
+
+    def _read_since(cursor: int) -> list[CardResult]:
+        """Return full foreign batch on first call, empty on second."""
+        read_since_calls.append(cursor)
+        if cursor == 0:
+            return foreign_batch
+        return []
+
+    run_state = MagicMock()
+    run_state.active_runs.return_value = [run_a]
+    run_state.get_run.return_value = run_a
+    # All task_ids resolve to run-b's node — none owned by run-a.
+    run_state.get_node_by_task.return_value = node_b
+
+    event_log = MagicMock()
+    event_log.read_since.side_effect = _read_since
+
+    kanban = MagicMock()
+    serializer = MagicMock()
+    store = MagicMock()
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    advance_calls: list[str] = []
+
+    def _must_not_advance(**kwargs: object) -> None:
+        """Record any advance call — this should never be reached."""
+        result = kwargs.get("card_result")
+        if hasattr(result, "task_id"):
+            advance_calls.append(str(result.task_id))  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess, reportUnknownMemberType, reportUnknownArgumentType]
+
+    # Must terminate (not hang); pytest will time-out if the loop is infinite.
+    reconcile(
+        run_state=run_state,
+        event_log=event_log,
+        serializer=serializer,
+        store=store,
+        kanban=kanban,
+        clock=clock,
+        advance_fn=_must_not_advance,
+    )
+
+    # advance_fn must never be called — no events belong to run-a.
+    assert advance_calls == [], "advance_fn must not be called for foreign-run events"
+
+    # read_since must be called exactly twice: cursor=0 (full batch) then cursor=100 ([]).
+    assert read_since_calls == [0, EVENT_LOG_BATCH_SIZE], (
+        f"Expected read_since([0, {EVENT_LOG_BATCH_SIZE}]), got {read_since_calls}. "
+        "The loop must advance the local cursor past the full foreign batch."
+    )
+
+    # The persisted cursor (save_run) must never be updated — no owned events processed.
+    run_state.save_run.assert_not_called()
+
+    # Pipeline must never be loaded — no owned events triggered pipeline loading.
+    store.load.assert_not_called()

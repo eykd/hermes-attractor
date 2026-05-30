@@ -215,10 +215,28 @@ def _reconcile_run(  # noqa: PLR0913
         if len(events) < EVENT_LOG_BATCH_SIZE:
             break
 
-        # Full batch returned: more events may remain. Re-read the cursor from the
-        # store (advance_fn may have advanced it via save_run) before next iteration.
-        current_run = run_state.get_run(run_id)
-        if current_run is None:
-            _log.warning("reconcile: run %s disappeared during batch loop", run_id)
-            break
-        cursor = current_run.last_seen_event_id
+        # Full batch returned: more events may remain.
+        #
+        # IMPORTANT (zym.48 fix): advance the LOCAL read cursor past the highest
+        # event_id seen in this batch, regardless of whether any events were owned.
+        # If all events in a full batch belonged to other runs (owned_events is
+        # empty), advance_fn never ran, save_run was never called, and the persisted
+        # cursor is unchanged.  Using the stored cursor for the next read_since call
+        # would re-fetch the identical batch forever — an infinite loop.
+        #
+        # The local cursor always moves forward to max(event_id) in the batch, so
+        # foreign-event batches make progress.  Only OWNED events advance the
+        # persisted cursor (via advance_fn → save_run), preserving the zym.41
+        # invariant: run A's stored cursor only moves on run A's events.
+        cursor = max(e.event_id for e in events)
+
+        if owned_events:
+            # advance_fn may have advanced the stored cursor further (e.g. if the
+            # last owned event_id > max of this batch, which can't happen, but
+            # reading the stored cursor is the safe way to stay in sync).
+            current_run = run_state.get_run(run_id)
+            if current_run is None:
+                _log.warning("reconcile: run %s disappeared during batch loop", run_id)
+                break
+            # Use max of local cursor and stored cursor so we never go backwards.
+            cursor = max(cursor, current_run.last_seen_event_id)
