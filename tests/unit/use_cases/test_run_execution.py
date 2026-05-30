@@ -1141,8 +1141,35 @@ def test_advance_goal_gate_fail_creates_retry_card_with_incremented_attempt() ->
 
 
 def test_advance_goal_gate_fail_with_nonexistent_retry_target_saves_run() -> None:
-    """Goal gate fail when retry_target node doesn't exist still saves run cursor."""
-    pipeline = _make_gate_pipeline_unit()
+    """Goal gate fail when retry_target node doesn't exist still saves run cursor.
+
+    Uses a pipeline where the pipeline node's own goal_gate.retry_target points to
+    a node that doesn't exist in the node_map, so the retry block falls through to
+    normal edge routing and the run cursor is still saved.
+    """
+    # Build a custom pipeline where the gate node's goal_gate.retry_target is "ghost_retry_target",
+    # which doesn't exist in nodes. The fix reads the LIVE pipeline goal_gate, so we must
+    # use a pipeline where the live goal_gate itself has the nonexistent retry target.
+    start = Node(node_id="start", shape=NodeShape.START)
+    work = Node(node_id="work", shape=NodeShape.CODERGEN, profile="coder")
+    gate = Node(
+        node_id="gate",
+        shape=NodeShape.CODERGEN,
+        profile="reviewer",
+        goal_gate=GoalGatePolicy(retry_target="ghost_retry_target", max_attempts=3),
+    )
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    pipeline = Pipeline(
+        spec_id="ghost-retry-pipeline",
+        nodes=[start, work, gate, exit_],
+        edges=[
+            Edge(source_id="start", target_id="work"),
+            Edge(source_id="work", target_id="gate"),
+            Edge(source_id="gate", target_id="exit", label="pass"),
+            Edge(source_id="gate", target_id="work", label="fail"),
+        ],
+        stylesheet=Stylesheet(rules=[StyleRule(selector="*", profile="default")]),
+    )
     run = _make_run()
     gate_node = RunNode(
         run_id="run1",
@@ -1151,7 +1178,7 @@ def test_advance_goal_gate_fail_with_nonexistent_retry_target_saves_run() -> Non
         status=NodeRunStatus.RUNNING,
         attempt=1,
         parent_node_ids=["work"],
-        # retry_target points to a node that doesn't exist in the pipeline
+        # goal_gate_policy may be None or set; the fix reads the live pipeline goal_gate.
         goal_gate_policy=GoalGatePolicy(retry_target="ghost_retry_target", max_attempts=3),
     )
     run_state = MagicMock()
@@ -2727,3 +2754,692 @@ def test_fan_in_merge_list_accumulate_no_duplication() -> None:
         f"expected items=[1, 2] (each branch contributes once), got {items!r}. "
         "List concatenation must not duplicate values."
     )
+
+
+# ---------------------------------------------------------------------------
+# Bug (zym.43): goal_gate_policy not populated in HUMAN/FAN_IN/TOOL-inline dispatch paths
+# ---------------------------------------------------------------------------
+
+
+def _make_human_gate_pipeline() -> Pipeline:
+    """Build: start -> gated_human -> exit, where gated_human is a HUMAN node with goal_gate.
+
+    This exercises the HUMAN dispatch path — the task description bug site at ~line 585-592.
+    """
+    start = Node(node_id="start", shape=NodeShape.START)
+    work = Node(node_id="work", shape=NodeShape.CODERGEN, profile="coder")
+    gated_human = Node(
+        node_id="gated_human",
+        shape=NodeShape.HUMAN,
+        profile="human",
+        goal_gate=GoalGatePolicy(retry_target="work", max_attempts=2),
+    )
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    return Pipeline(
+        spec_id="human-gate-pipeline",
+        nodes=[start, work, gated_human, exit_],
+        edges=[
+            Edge(source_id="start", target_id="work"),
+            Edge(source_id="work", target_id="gated_human"),
+            Edge(source_id="gated_human", target_id="work", label="fail"),
+            Edge(source_id="gated_human", target_id="exit", label="pass"),
+        ],
+        stylesheet=Stylesheet(rules=[StyleRule(selector="*", profile="default")]),
+    )
+
+
+def _make_fan_in_gate_pipeline() -> Pipeline:
+    """Build a pipeline where the FAN_IN node itself has a goal_gate.
+
+    Topology: start -> fan_out -> [branch_a, branch_b] -> gated_fan_in -> exit.
+    This exercises the FAN_IN dispatch path — bug site at ~line 651-658.
+    """
+    start = Node(node_id="start", shape=NodeShape.START)
+    fan_out = Node(node_id="fan_out", shape=NodeShape.FAN_OUT, profile="orchestrator")
+    branch_a = Node(node_id="branch_a", shape=NodeShape.CODERGEN, profile="coder")
+    branch_b = Node(node_id="branch_b", shape=NodeShape.CODERGEN, profile="coder")
+    gated_fan_in = Node(
+        node_id="gated_fan_in",
+        shape=NodeShape.FAN_IN,
+        profile="merger",
+        goal_gate=GoalGatePolicy(retry_target="fan_out", max_attempts=2),
+    )
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    return Pipeline(
+        spec_id="fan-in-gate-pipeline",
+        nodes=[start, fan_out, branch_a, branch_b, gated_fan_in, exit_],
+        edges=[
+            Edge(source_id="start", target_id="fan_out"),
+            Edge(source_id="fan_out", target_id="branch_a"),
+            Edge(source_id="fan_out", target_id="branch_b"),
+            Edge(source_id="branch_a", target_id="gated_fan_in"),
+            Edge(source_id="branch_b", target_id="gated_fan_in"),
+            Edge(source_id="gated_fan_in", target_id="exit", label="pass"),
+            Edge(source_id="gated_fan_in", target_id="fan_out", label="fail"),
+        ],
+        stylesheet=Stylesheet(rules=[StyleRule(selector="*", profile="default")]),
+    )
+
+
+def _make_tool_then_gate_pipeline() -> Pipeline:
+    """Build: start -> tool_node -> gated_work -> exit, where gated_work has goal_gate.
+
+    This exercises the TOOL-inline next dispatch path — bug site at ~line 716-724.
+    """
+    start = Node(node_id="start", shape=NodeShape.START)
+    tool_node = Node(node_id="tool_node", shape=NodeShape.TOOL, prompt="my_tool")
+    gated_work = Node(
+        node_id="gated_work",
+        shape=NodeShape.CODERGEN,
+        profile="coder",
+        goal_gate=GoalGatePolicy(retry_target="gated_work", max_attempts=2),
+    )
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    return Pipeline(
+        spec_id="tool-gate-pipeline",
+        nodes=[start, tool_node, gated_work, exit_],
+        edges=[
+            Edge(source_id="start", target_id="tool_node"),
+            Edge(source_id="tool_node", target_id="gated_work"),
+            Edge(source_id="gated_work", target_id="exit", label="pass"),
+            Edge(source_id="gated_work", target_id="gated_work", label="fail"),
+        ],
+        stylesheet=Stylesheet(rules=[StyleRule(selector="*", profile="default")]),
+    )
+
+
+def test_human_dispatch_populates_goal_gate_policy_from_pipeline_node() -> None:
+    """HUMAN dispatch path must copy next_node.goal_gate into RunNode.goal_gate_policy.
+
+    Bug: the HUMAN RunNode is created without goal_gate_policy, so a goal-gated HUMAN
+    node reached via the HUMAN dispatch path never retries on fail.
+
+    This test drives the REAL dispatch path (work completes -> gated_human is dispatched)
+    without manually setting goal_gate_policy on the fixture — asserting the gate retries
+    on fail by first confirming the dispatched RunNode carries the policy.
+    """
+    pipeline = _make_human_gate_pipeline()
+    run = Run(
+        run_id="run-human-gate",
+        spec_id="human-gate-pipeline",
+        status=RunStatus.RUNNING,
+        context=Context(data={}),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    work_record = RunNode(
+        run_id="run-human-gate",
+        node_id="work",
+        task_id="task-work",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=["start"],
+    )
+
+    upserted: list[RunNode] = []
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = work_record
+    run_state.get_run.return_value = run
+    run_state.upsert_node.side_effect = upserted.append
+    kanban = MagicMock()
+    kanban.create_card.return_value = "task-human"
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    advance_on_completion(
+        card_result=CardResult(
+            task_id="task-work",
+            event_id=1,
+            event_kind="completed",
+            summary="Work done.",
+            metadata={},
+        ),
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    human_nodes = [n for n in upserted if n.node_id == "gated_human"]
+    assert human_nodes, "Expected a RunNode upserted for gated_human"
+    human_record = human_nodes[0]
+    assert human_record.goal_gate_policy is not None, (
+        "HUMAN dispatch path must copy next_node.goal_gate into RunNode.goal_gate_policy; "
+        "leaving it None makes FR-009 goal-gate retry unreachable when reached via HUMAN path"
+    )
+    assert human_record.goal_gate_policy.retry_target == "work"
+    assert human_record.goal_gate_policy.max_attempts == 2
+
+
+def test_human_gate_retries_on_fail_via_real_dispatch_path() -> None:
+    """A goal-gated HUMAN node reached via the HUMAN dispatch path retries on fail.
+
+    This test exercises the full chain without manually injecting goal_gate_policy:
+    1. work completes -> gated_human dispatched (goal_gate_policy populated from pipeline).
+    2. gated_human card fails -> a retry card for work is created.
+
+    If goal_gate_policy is None (the pre-fix bug), no retry card is created.
+    """
+    pipeline = _make_human_gate_pipeline()
+    run = Run(
+        run_id="run-human-gate-retry",
+        spec_id="human-gate-pipeline",
+        status=RunStatus.RUNNING,
+        context=Context(data={}),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+    # Step 1: work completes -> gated_human dispatched.
+    work_record = RunNode(
+        run_id="run-human-gate-retry",
+        node_id="work",
+        task_id="task-work",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=["start"],
+    )
+    upserted_step1: list[RunNode] = []
+    run_state_1 = MagicMock()
+    run_state_1.get_node_by_task.return_value = work_record
+    run_state_1.get_run.return_value = run
+    run_state_1.upsert_node.side_effect = upserted_step1.append
+    kanban_1 = MagicMock()
+    kanban_1.create_card.return_value = "task-human"
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    advance_on_completion(
+        card_result=CardResult(task_id="task-work", event_id=1, event_kind="completed", summary=".", metadata={}),
+        kanban=kanban_1,
+        run_state=run_state_1,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    human_nodes = [n for n in upserted_step1 if n.node_id == "gated_human"]
+    assert human_nodes, "gated_human must be dispatched after work completes"
+    human_record = human_nodes[0]
+    # Key invariant: populated from pipeline, no manual injection.
+    assert human_record.goal_gate_policy is not None, "human dispatch must populate goal_gate_policy from pipeline"
+
+    # Step 2: gated_human card completes with gate=fail -> retry card for work.
+    work_succeeded = RunNode(
+        run_id="run-human-gate-retry",
+        node_id="work",
+        task_id="task-work",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=1,
+        parent_node_ids=["start"],
+    )
+    run_state_2 = MagicMock()
+    run_state_2.get_node_by_task.return_value = human_record
+    run_state_2.get_run.return_value = Run(
+        run_id="run-human-gate-retry",
+        spec_id="human-gate-pipeline",
+        status=RunStatus.PAUSED_HUMAN,
+        context=Context(data={}),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    run_state_2.nodes_for_run.return_value = [work_succeeded, human_record]
+    kanban_2 = MagicMock()
+    kanban_2.create_card.return_value = "task-work-retry"
+    clock_2 = MagicMock()
+    clock_2.now.return_value = _NOW
+
+    advance_on_completion(
+        card_result=CardResult(
+            task_id="task-human",
+            event_id=2,
+            event_kind="completed",
+            summary="Human failed gate.",
+            metadata={},  # no gate field => fail-secure
+        ),
+        kanban=kanban_2,
+        run_state=run_state_2,
+        pipeline=pipeline,
+        clock=clock_2,
+    )
+
+    assert kanban_2.create_card.called, "A retry card must be created when gated HUMAN fails"
+    retry_card = kanban_2.create_card.call_args[0][0]
+    assert "work" in retry_card.idempotency_key.value, "Retry card must target the retry_target node 'work'"
+
+
+def test_fan_in_dispatch_populates_goal_gate_policy_from_pipeline_node() -> None:
+    """FAN_IN dispatch path must copy next_node.goal_gate into RunNode.goal_gate_policy.
+
+    Bug: the FAN_IN RunNode is created without goal_gate_policy, so a goal-gated FAN_IN
+    node never retries on fail when reached via the FAN_IN dispatch path.
+
+    This test drives the REAL dispatch path:
+    branch_b completes (all branches done) -> gated_fan_in is dispatched.
+    The dispatched RunNode must carry goal_gate_policy from the pipeline.
+    """
+    pipeline = _make_fan_in_gate_pipeline()
+    run = Run(
+        run_id="run-fan-in-gate",
+        spec_id="fan-in-gate-pipeline",
+        status=RunStatus.RUNNING,
+        context=Context(data={}),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+    branch_a_succeeded = RunNode(
+        run_id="run-fan-in-gate",
+        node_id="branch_a",
+        task_id="task-branch-a",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=1,
+        parent_node_ids=["fan_out"],
+    )
+    branch_b_record = RunNode(
+        run_id="run-fan-in-gate",
+        node_id="branch_b",
+        task_id="task-branch-b",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=["fan_out"],
+    )
+    branch_b_succeeded = RunNode(
+        run_id="run-fan-in-gate",
+        node_id="branch_b",
+        task_id="task-branch-b",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=1,
+        parent_node_ids=["fan_out"],
+    )
+
+    upserted: list[RunNode] = []
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = branch_b_record
+    run_state.get_run.return_value = run
+    # Both branches done -> FAN_IN fires.
+    run_state.nodes_for_run.return_value = [branch_a_succeeded, branch_b_succeeded]
+    run_state.upsert_node.side_effect = upserted.append
+    kanban = MagicMock()
+    kanban.create_card.return_value = "task-fan-in"
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    advance_on_completion(
+        card_result=CardResult(
+            task_id="task-branch-b",
+            event_id=2,
+            event_kind="completed",
+            summary="branch_b done.",
+            metadata={},
+        ),
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    fan_in_nodes = [n for n in upserted if n.node_id == "gated_fan_in"]
+    assert fan_in_nodes, "Expected a RunNode upserted for gated_fan_in"
+    fan_in_record = fan_in_nodes[0]
+    assert fan_in_record.goal_gate_policy is not None, (
+        "FAN_IN dispatch path must copy next_node.goal_gate into RunNode.goal_gate_policy; "
+        "leaving it None makes FR-009 goal-gate retry unreachable when reached via FAN_IN path"
+    )
+    assert fan_in_record.goal_gate_policy.retry_target == "fan_out"
+    assert fan_in_record.goal_gate_policy.max_attempts == 2
+
+
+def test_fan_in_gate_retries_on_fail_via_real_dispatch_path() -> None:
+    """A goal-gated FAN_IN node retries on fail when dispatched via the FAN_IN path.
+
+    This test exercises the full chain without manually injecting goal_gate_policy:
+    1. branch_b completes (all done) -> gated_fan_in dispatched (policy from pipeline).
+    2. gated_fan_in card fails -> a retry card for fan_out is created.
+    """
+    pipeline = _make_fan_in_gate_pipeline()
+    run = Run(
+        run_id="run-fan-in-gate-retry",
+        spec_id="fan-in-gate-pipeline",
+        status=RunStatus.RUNNING,
+        context=Context(data={}),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+    # Step 1: both branches done -> gated_fan_in dispatched.
+    branch_a_succeeded = RunNode(
+        run_id="run-fan-in-gate-retry",
+        node_id="branch_a",
+        task_id="task-branch-a",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=1,
+        parent_node_ids=["fan_out"],
+    )
+    branch_b_record = RunNode(
+        run_id="run-fan-in-gate-retry",
+        node_id="branch_b",
+        task_id="task-branch-b",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=["fan_out"],
+    )
+    branch_b_succeeded = RunNode(
+        run_id="run-fan-in-gate-retry",
+        node_id="branch_b",
+        task_id="task-branch-b",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=1,
+        parent_node_ids=["fan_out"],
+    )
+
+    upserted_step1: list[RunNode] = []
+    run_state_1 = MagicMock()
+    run_state_1.get_node_by_task.return_value = branch_b_record
+    run_state_1.get_run.return_value = run
+    run_state_1.nodes_for_run.return_value = [branch_a_succeeded, branch_b_succeeded]
+    run_state_1.upsert_node.side_effect = upserted_step1.append
+    kanban_1 = MagicMock()
+    kanban_1.create_card.return_value = "task-fan-in"
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    advance_on_completion(
+        card_result=CardResult(task_id="task-branch-b", event_id=1, event_kind="completed", summary=".", metadata={}),
+        kanban=kanban_1,
+        run_state=run_state_1,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    fan_in_nodes = [n for n in upserted_step1 if n.node_id == "gated_fan_in"]
+    assert fan_in_nodes, "gated_fan_in must be dispatched when all branches done"
+    fan_in_record = fan_in_nodes[0]
+    assert fan_in_record.goal_gate_policy is not None, "fan_in dispatch must populate goal_gate_policy from pipeline"
+
+    # Step 2: gated_fan_in fails -> retry card for fan_out.
+    fan_out_node = RunNode(
+        run_id="run-fan-in-gate-retry",
+        node_id="fan_out",
+        task_id="task-fan-out",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=1,
+        parent_node_ids=["start"],
+    )
+    run_state_2 = MagicMock()
+    run_state_2.get_node_by_task.return_value = fan_in_record
+    run_state_2.get_run.return_value = run
+    run_state_2.nodes_for_run.return_value = [fan_out_node, branch_a_succeeded, branch_b_succeeded, fan_in_record]
+    kanban_2 = MagicMock()
+    kanban_2.create_card.return_value = "task-fan-out-retry"
+    clock_2 = MagicMock()
+    clock_2.now.return_value = _NOW
+
+    advance_on_completion(
+        card_result=CardResult(
+            task_id="task-fan-in",
+            event_id=2,
+            event_kind="completed",
+            summary="FAN_IN gate failed.",
+            metadata={},  # no gate field => fail-secure
+        ),
+        kanban=kanban_2,
+        run_state=run_state_2,
+        pipeline=pipeline,
+        clock=clock_2,
+    )
+
+    assert kanban_2.create_card.called, "A retry card must be created when gated FAN_IN fails"
+    retry_card = kanban_2.create_card.call_args[0][0]
+    assert "fan_out" in retry_card.idempotency_key.value, "Retry card must target the retry_target node 'fan_out'"
+
+
+def test_tool_inline_dispatch_populates_goal_gate_policy_from_pipeline_node() -> None:
+    """TOOL-inline next dispatch path must copy tool_next_node.goal_gate into RunNode.goal_gate_policy.
+
+    Bug: the RunNode dispatched after a TOOL node is created without goal_gate_policy,
+    so a goal-gated node reached via a TOOL-inline next dispatch never retries on fail.
+
+    This test drives the REAL dispatch path:
+    start completes -> tool_node runs inline -> gated_work is dispatched.
+    The dispatched RunNode must carry goal_gate_policy from the pipeline.
+    """
+    pipeline = _make_tool_then_gate_pipeline()
+    run = Run(
+        run_id="run-tool-gate",
+        spec_id="tool-gate-pipeline",
+        status=RunStatus.RUNNING,
+        context=Context(data={}),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    # "start" node just completed — advance will route through tool_node inline and dispatch gated_work.
+    start_record = RunNode(
+        run_id="run-tool-gate",
+        node_id="start",
+        task_id="task-start",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=[],
+    )
+
+    upserted: list[RunNode] = []
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = start_record
+    run_state.get_run.return_value = run
+    run_state.upsert_node.side_effect = upserted.append
+    kanban = MagicMock()
+    kanban.create_card.return_value = "task-gated-work"
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    advance_on_completion(
+        card_result=CardResult(
+            task_id="task-start",
+            event_id=1,
+            event_kind="completed",
+            summary="Start done.",
+            metadata={},
+        ),
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    gated_nodes = [n for n in upserted if n.node_id == "gated_work"]
+    assert gated_nodes, "Expected a RunNode upserted for gated_work after TOOL inline dispatch"
+    gated_record = gated_nodes[0]
+    assert gated_record.goal_gate_policy is not None, (
+        "TOOL-inline next dispatch path must copy tool_next_node.goal_gate into RunNode.goal_gate_policy; "
+        "leaving it None makes FR-009 goal-gate retry unreachable when reached via TOOL-inline path"
+    )
+    assert gated_record.goal_gate_policy.retry_target == "gated_work"
+    assert gated_record.goal_gate_policy.max_attempts == 2
+
+
+def test_tool_inline_gate_retries_on_fail_via_real_dispatch_path() -> None:
+    """A goal-gated node reached via TOOL-inline next dispatch retries on fail.
+
+    This test exercises the full chain without manually injecting goal_gate_policy:
+    1. start completes -> tool_node runs inline -> gated_work dispatched (policy from pipeline).
+    2. gated_work card fails -> a retry card for gated_work is created (self-loop retry).
+    """
+    pipeline = _make_tool_then_gate_pipeline()
+    run = Run(
+        run_id="run-tool-gate-retry",
+        spec_id="tool-gate-pipeline",
+        status=RunStatus.RUNNING,
+        context=Context(data={}),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+
+    # Step 1: start completes -> tool_node inline -> gated_work dispatched.
+    start_record = RunNode(
+        run_id="run-tool-gate-retry",
+        node_id="start",
+        task_id="task-start",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=[],
+    )
+    upserted_step1: list[RunNode] = []
+    run_state_1 = MagicMock()
+    run_state_1.get_node_by_task.return_value = start_record
+    run_state_1.get_run.return_value = run
+    run_state_1.upsert_node.side_effect = upserted_step1.append
+    kanban_1 = MagicMock()
+    kanban_1.create_card.return_value = "task-gated-work"
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    advance_on_completion(
+        card_result=CardResult(task_id="task-start", event_id=1, event_kind="completed", summary=".", metadata={}),
+        kanban=kanban_1,
+        run_state=run_state_1,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    gated_nodes = [n for n in upserted_step1 if n.node_id == "gated_work"]
+    assert gated_nodes, "gated_work must be dispatched after TOOL inline dispatch"
+    gated_record = gated_nodes[0]
+    assert gated_record.goal_gate_policy is not None, (
+        "TOOL inline dispatch must populate goal_gate_policy from pipeline"
+    )
+
+    # Step 2: gated_work fails -> retry card for gated_work (self-loop).
+    run_state_2 = MagicMock()
+    run_state_2.get_node_by_task.return_value = gated_record
+    run_state_2.get_run.return_value = run
+    run_state_2.nodes_for_run.return_value = [gated_record]
+    kanban_2 = MagicMock()
+    kanban_2.create_card.return_value = "task-gated-work-retry"
+    clock_2 = MagicMock()
+    clock_2.now.return_value = _NOW
+
+    advance_on_completion(
+        card_result=CardResult(
+            task_id="task-gated-work",
+            event_id=2,
+            event_kind="completed",
+            summary="Gate failed.",
+            metadata={},  # no gate field => fail-secure
+        ),
+        kanban=kanban_2,
+        run_state=run_state_2,
+        pipeline=pipeline,
+        clock=clock_2,
+    )
+
+    assert kanban_2.create_card.called, "A retry card must be created when gated node via TOOL-inline fails"
+    retry_card = kanban_2.create_card.call_args[0][0]
+    assert "gated_work" in retry_card.idempotency_key.value, "Retry card must target the retry_target node 'gated_work'"
+
+
+def test_retry_decision_reads_live_pipeline_goal_gate_not_persisted_policy() -> None:
+    """At retry decision, the live pipeline_node.goal_gate must be used, not node_record.goal_gate_policy.
+
+    Bug: line ~437 checks node_record.goal_gate_policy (the persisted policy). If the
+    persisted policy is None (dropped/not populated by the broken dispatch path),
+    a gate node that SHOULD retry goes PARTIAL and is silently bypassed — the run
+    follows the "pass" edge to EXIT instead of retrying.
+
+    Fix: the gate-pass check at ~320 uses pipeline_node.goal_gate (live). The retry
+    decision at ~437 should do the same: read pipeline_node.goal_gate.
+
+    This test constructs a pipeline where the gate has ONLY a "pass" edge to EXIT
+    (no "fail" label edge). With goal_gate_policy=None on the RunNode and the bug:
+      - is_gate=True (from pipeline), gate_passed=False (fail-secure)
+      - Retry block at ~437 is skipped (goal_gate_policy is None)
+      - Regular routing selects the "pass"-labeled edge to EXIT (routing_hint="fail"
+        doesn't match "pass" label, but fallback to weight/lexical picks the only edge)
+      - run is marked SUCCEEDED — WRONG, gate failed!
+
+    With the fix: retry block uses pipeline_node.goal_gate, and the run is NOT SUCCEEDED.
+    """
+    start = Node(node_id="start", shape=NodeShape.START)
+    work = Node(node_id="work", shape=NodeShape.CODERGEN, profile="coder")
+    gate = Node(
+        node_id="gate",
+        shape=NodeShape.CODERGEN,
+        profile="reviewer",
+        goal_gate=GoalGatePolicy(retry_target="work", max_attempts=2),
+    )
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    # IMPORTANT: only a "pass" edge from gate to exit (no "fail" edge).
+    # With the bug: regular routing selects exit (only edge) => run SUCCEEDS on gate failure!
+    pipeline = Pipeline(
+        spec_id="live-gate-passonly-pipeline",
+        nodes=[start, work, gate, exit_],
+        edges=[
+            Edge(source_id="start", target_id="work"),
+            Edge(source_id="work", target_id="gate"),
+            Edge(source_id="gate", target_id="exit", label="pass"),
+            # Deliberately NO "fail" edge — only goal_gate policy can trigger retry.
+        ],
+        stylesheet=Stylesheet(rules=[StyleRule(selector="*", profile="default")]),
+    )
+    run = Run(
+        run_id="run-live-gate-passonly",
+        spec_id="live-gate-passonly-pipeline",
+        status=RunStatus.RUNNING,
+        context=Context(data={}),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    # Simulates the pre-fix bug: goal_gate_policy=None on the persisted RunNode.
+    gate_record_no_policy = RunNode(
+        run_id="run-live-gate-passonly",
+        node_id="gate",
+        task_id="task-gate",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=["work"],
+        goal_gate_policy=None,  # the broken pre-fix state
+    )
+    work_succeeded = RunNode(
+        run_id="run-live-gate-passonly",
+        node_id="work",
+        task_id="task-work",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=1,
+        parent_node_ids=["start"],
+    )
+
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = gate_record_no_policy
+    run_state.get_run.return_value = run
+    run_state.nodes_for_run.return_value = [work_succeeded, gate_record_no_policy]
+    kanban = MagicMock()
+    kanban.create_card.return_value = "task-work-retry"
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    advance_on_completion(
+        card_result=CardResult(
+            task_id="task-gate",
+            event_id=1,
+            event_kind="completed",
+            summary="Gate failed.",
+            metadata={},  # no gate field => fail-secure
+        ),
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    # With the fix: retry card must be created (goal_gate.retry_target=work),
+    # NOT the run silently marked SUCCEEDED via the "pass" exit edge.
+    assert kanban.create_card.called, (
+        "Retry must be triggered using the live pipeline_node.goal_gate, "
+        "not the persisted node_record.goal_gate_policy which may be None; "
+        "without the fix, the gate silently routes to EXIT on failure"
+    )
+    # The run must NOT be marked SUCCEEDED — gate failed, must retry.
+    if run_state.save_run.called:
+        saved_runs = [call[0][0] for call in run_state.save_run.call_args_list]
+        assert not any(r.status is RunStatus.SUCCEEDED for r in saved_runs), (
+            "Run must NOT be SUCCEEDED when gate fails and retry is available; the bug causes silent bypass to EXIT"
+        )

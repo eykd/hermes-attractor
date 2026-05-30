@@ -434,8 +434,14 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
     #
     # Gate verdict is parsed via ``_gate_verdict_pass`` which returns ``False``
     # for any missing or malformed ``gate`` field (fail-secure per security spec).
-    if not gate_passed and node_record.goal_gate_policy is not None:
-        policy = node_record.goal_gate_policy
+    #
+    # READ LIVE POLICY (zym.43): use pipeline_node.goal_gate (live) instead of
+    # node_record.goal_gate_policy (persisted), so that a gate node with a dropped
+    # or None persisted policy still triggers retry. This is consistent with how
+    # is_gate is determined at ~320 (also reads the live pipeline node).
+    _live_gate_policy = pipeline_node.goal_gate if pipeline_node is not None else None
+    if not gate_passed and _live_gate_policy is not None:
+        policy = _live_gate_policy
         retry_target = policy.retry_target
         retry_node = node_map.get(retry_target)
         # Derive next_attempt from the gate node's own attempt counter (FR-024).
@@ -589,6 +595,7 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
                 status=NodeRunStatus.DISPATCHED,
                 attempt=attempt,
                 parent_node_ids=[node_record.node_id],
+                goal_gate_policy=next_node.goal_gate,
             )
             run_state.upsert_node(human_run_node)
             # Block the card and transition run to PAUSED_HUMAN (cursor-last).
@@ -655,6 +662,7 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
                 status=NodeRunStatus.DISPATCHED,
                 attempt=1,
                 parent_node_ids=list(fan_in_predecessors),
+                goal_gate_policy=next_node.goal_gate,
             )
             run_state.upsert_node(fan_in_run_node)
         elif next_node and next_node.shape is NodeShape.TOOL:
@@ -720,6 +728,7 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
                         status=NodeRunStatus.DISPATCHED,
                         attempt=1,
                         parent_node_ids=[next_node.node_id],
+                        goal_gate_policy=tool_next_node.goal_gate,
                     )
                     run_state.upsert_node(t_run_node)
                     # Cursor-last: save run after all structural writes are complete.
