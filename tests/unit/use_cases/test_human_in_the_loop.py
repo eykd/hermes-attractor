@@ -253,10 +253,9 @@ def test_advance_on_completed_human_card_transitions_run_to_running() -> None:
         clock=clock,
     )
 
-    # Run must have been updated — either to RUNNING or directly to SUCCEEDED
-    # (since human_review -> exit).
+    # Run must have transitioned to SUCCEEDED (human_review -> exit pipeline is deterministic).
     run_state.save_run.assert_called()
     saved_run: Run = run_state.save_run.call_args[0][0]
-    assert saved_run.status in (RunStatus.RUNNING, RunStatus.SUCCEEDED), (
-        f"Expected RUNNING or SUCCEEDED after human input, got {saved_run.status}"
+    assert saved_run.status is RunStatus.SUCCEEDED, (
+        f"Expected SUCCEEDED after human card completes leading to EXIT, got {saved_run.status}"
     )
