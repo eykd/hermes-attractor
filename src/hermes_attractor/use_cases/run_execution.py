@@ -500,9 +500,17 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
         if potential_fan_in is not None and potential_fan_in.shape is NodeShape.FAN_IN:
             # Find all predecessor nodes for this FAN_IN.
             fan_in_predecessors = {e.source_id for e in pipeline.edges if e.target_id == potential_fan_in.node_id}
-            # Get all RunNodes for these predecessors.
+            # Get all RunNodes for these predecessors, deduped to the latest attempt per
+            # node_id (FR-010). A retried branch produces multiple rows (attempt=1, attempt=2,
+            # …); the length check must compare unique node_ids, not raw row count.
             all_nodes = run_state.nodes_for_run(run.run_id)
-            predecessor_nodes = [n for n in all_nodes if n.node_id in fan_in_predecessors]
+            latest_per_predecessor: dict[str, RunNode] = {}
+            for n in all_nodes:
+                if n.node_id in fan_in_predecessors:
+                    existing = latest_per_predecessor.get(n.node_id)
+                    if existing is None or n.attempt > existing.attempt:
+                        latest_per_predecessor[n.node_id] = n
+            predecessor_nodes = list(latest_per_predecessor.values())
             all_succeeded = all(
                 n.status in (NodeRunStatus.SUCCEEDED, NodeRunStatus.PARTIAL) for n in predecessor_nodes
             ) and len(predecessor_nodes) == len(fan_in_predecessors)
@@ -569,9 +577,18 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
         if next_node and next_node.shape is NodeShape.FAN_IN:
             # FAN_IN: dispatch the FAN_IN card (all predecessors already confirmed done above).
             # Merge branch context_updates using Context.merge() for conflict detection (R-MERGE / FR-008).
+            # Dedup to the latest attempt per predecessor node_id (FR-010): a retried branch
+            # produces multiple rows, and only the final (highest-attempt) row's context_updates
+            # should contribute to the merged context.
             fan_in_predecessors = {e.source_id for e in pipeline.edges if e.target_id == next_node.node_id}
             all_nodes_for_merge = run_state.nodes_for_run(run.run_id)
-            fan_in_predecessor_nodes = [n for n in all_nodes_for_merge if n.node_id in fan_in_predecessors]
+            latest_for_merge: dict[str, RunNode] = {}
+            for n in all_nodes_for_merge:
+                if n.node_id in fan_in_predecessors:
+                    existing = latest_for_merge.get(n.node_id)
+                    if existing is None or n.attempt > existing.attempt:
+                        latest_for_merge[n.node_id] = n
+            fan_in_predecessor_nodes = list(latest_for_merge.values())
             branch_contexts = [Context(data=n.context_updates) for n in fan_in_predecessor_nodes]
             merged_context = run.context.merge(branch_contexts)
             # Update run with merged context before dispatching the FAN_IN card.
