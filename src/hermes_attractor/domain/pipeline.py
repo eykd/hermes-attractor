@@ -303,6 +303,7 @@ class Pipeline:
           - Full reachability from the START node.
           - All goal-gate retry_targets exist and are reachable.
           - All resolved profiles are non-empty.
+          - No TOOL -> TOOL edges (would cause silent run stalls; hermes-attractor-zym.35).
 
         Returns:
             A list of ValidationIssue; empty list means the pipeline is valid.
@@ -315,6 +316,7 @@ class Pipeline:
         reachable = self._validate_reachability(start_nodes, issues)
         issues.extend(self._validate_goal_gates(node_ids, reachable))
         issues.extend(self._validate_profiles())
+        issues.extend(self._validate_tool_edges())
         return issues
 
     def _validate_structure(self, start_nodes: list[Node]) -> list[ValidationIssue]:
@@ -428,6 +430,36 @@ class Pipeline:
                     )
                 )
         return issues
+
+    def _validate_tool_edges(self) -> list[ValidationIssue]:
+        """Check that no TOOL node directly targets another TOOL node.
+
+        TOOL nodes execute inline (no kanban card). A TOOL -> TOOL edge causes the
+        run to stall silently: the first TOOL's inline dispatch falls into the
+        unrecognised-shape branch, saves the cursor, and returns — the second TOOL
+        never executes and no card completion event re-triggers the reconciler.
+
+        Designers who need sequential tool steps must route through an intermediate
+        non-TOOL node (e.g. CODERGEN or CONDITIONAL) to preserve the card-driven
+        advance cycle, or collapse the steps into a single TOOL node.
+
+        Returns:
+            List of ValidationIssue for each TOOL -> TOOL edge found.
+        """
+        tool_node_ids = frozenset(n.node_id for n in self.nodes if n.shape is NodeShape.TOOL)
+        return [
+            ValidationIssue(
+                element_id=edge.source_id,
+                reason=(
+                    f"TOOL node '{edge.source_id}' has an edge directly to another TOOL node"
+                    f" '{edge.target_id}'. TOOL -> TOOL chains stall the run silently because"
+                    " inline TOOL dispatch does not recurse into a second TOOL node."
+                    " Collapse the steps into one TOOL node or route through a non-TOOL node."
+                ),
+            )
+            for edge in self.edges
+            if edge.source_id in tool_node_ids and edge.target_id in tool_node_ids
+        ]
 
     def _validate_profiles(self) -> list[ValidationIssue]:
         """Check that all worker nodes have a resolved profile.

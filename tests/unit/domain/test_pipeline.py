@@ -555,3 +555,68 @@ def test_context_merge_conflict_records_all_writers_for_three_branches() -> None
     conflict_values = cast("list[object]", conflicts["x"])
     assert isinstance(conflict_values, list)
     assert len(conflict_values) >= 3
+
+
+# ---------------------------------------------------------------------------
+# TOOL -> TOOL edge validation (hermes-attractor-zym.35)
+# ---------------------------------------------------------------------------
+
+
+def _make_tool_tool_pipeline() -> Pipeline:
+    """Build a pipeline with a TOOL -> TOOL edge (start -> tool1 -> tool2 -> exit).
+
+    TOOL nodes do not create kanban cards, so if one TOOL's inline execution
+    selects another TOOL as its next node the run stalls silently unless the
+    edge is rejected at validation time.
+    """
+    nodes = [
+        Node(node_id="start", shape=NodeShape.START),
+        Node(node_id="tool1", shape=NodeShape.TOOL, profile="runner", prompt="step_one"),
+        Node(node_id="tool2", shape=NodeShape.TOOL, profile="runner", prompt="step_two"),
+        Node(node_id="exit", shape=NodeShape.EXIT),
+    ]
+    edges = [
+        Edge(source_id="start", target_id="tool1"),
+        Edge(source_id="tool1", target_id="tool2"),
+        Edge(source_id="tool2", target_id="exit"),
+    ]
+    return Pipeline(spec_id="tool_tool", nodes=nodes, edges=edges, stylesheet=Stylesheet(rules=[]))
+
+
+def test_pipeline_validate_rejects_tool_to_tool_edge() -> None:
+    """Pipeline.validate() reports an issue when a TOOL node directly targets another TOOL node.
+
+    TOOL nodes execute inline without creating a kanban card. A TOOL -> TOOL edge
+    causes the run to stall silently because the second TOOL is never executed and
+    no card completion event re-triggers the reconciler. Validation must surface this
+    as an explicit error so pipeline authors discover the problem at author time.
+    """
+    pipeline = _make_tool_tool_pipeline()
+    issues = pipeline.validate()
+    assert issues, "Expected at least one issue for a TOOL -> TOOL edge"
+    issue_texts = [str(issue) for issue in issues]
+    assert any("tool1" in text or "TOOL" in text for text in issue_texts), (
+        f"Expected an issue mentioning the TOOL -> TOOL edge (tool1 -> tool2): {issues}"
+    )
+
+
+def test_pipeline_validate_tool_to_non_tool_is_valid() -> None:
+    """Pipeline.validate() does not report an issue when a TOOL node targets a non-TOOL node.
+
+    A TOOL node that selects a CODERGEN, CONDITIONAL, HUMAN, FAN_OUT, or EXIT node
+    as its successor is a valid transition; only TOOL -> TOOL is forbidden.
+    """
+    nodes = [
+        Node(node_id="start", shape=NodeShape.START),
+        Node(node_id="tool1", shape=NodeShape.TOOL, profile="runner", prompt="step_one"),
+        Node(node_id="work", shape=NodeShape.CODERGEN, profile="worker"),
+        Node(node_id="exit", shape=NodeShape.EXIT),
+    ]
+    edges = [
+        Edge(source_id="start", target_id="tool1"),
+        Edge(source_id="tool1", target_id="work"),
+        Edge(source_id="work", target_id="exit"),
+    ]
+    pipeline = Pipeline(spec_id="tool_non_tool", nodes=nodes, edges=edges, stylesheet=Stylesheet(rules=[]))
+    issues = pipeline.validate()
+    assert issues == [], f"Expected no issues for TOOL -> non-TOOL pipeline, got: {issues}"
