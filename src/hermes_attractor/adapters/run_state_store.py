@@ -102,7 +102,7 @@ def _str_to_dt(s: str) -> datetime:
     Returns:
         A timezone-aware ``datetime`` in UTC.
     """
-    return datetime.fromisoformat(s).replace(tzinfo=UTC)
+    return datetime.fromisoformat(s).astimezone(UTC)
 
 
 def _goal_gate_to_json(policy: GoalGatePolicy | None) -> str | None:

@@ -6,6 +6,7 @@ Tests fail until ports/run_state.py and adapters/run_state_store.py are implemen
 from __future__ import annotations
 
 import datetime
+import sqlite3
 from pathlib import Path  # noqa: TC003  # used in function signatures at runtime
 
 import pytest
@@ -238,3 +239,35 @@ def test_upsert_node_with_goal_gate_policy_round_trips(tmp_path: Path) -> None:
     assert fetched.goal_gate_policy.max_attempts == 3
     assert fetched.output_ref == "ref://gate/1"
     assert list(fetched.parent_node_ids) == ["work"]
+
+
+# ---------------------------------------------------------------------------
+# Non-UTC timestamp deserialization
+# ---------------------------------------------------------------------------
+
+
+def test_get_run_with_non_utc_stored_timestamp_converts_correctly(tmp_path: Path) -> None:
+    """get_run correctly converts a non-UTC offset timestamp stored in the DB.
+
+    ``2026-05-01T12:00:00+05:00`` is 07:00 UTC, not 12:00 UTC.
+    The old ``replace(tzinfo=UTC)`` would silently return 12:00 UTC (wrong);
+    ``astimezone(UTC)`` returns the correct 07:00 UTC moment.
+    """
+    db_path = tmp_path / "runs.db"
+    store = SqliteRunStateStore(db_path=db_path)
+    store.create_run(_make_run("r1"))
+
+    # Directly patch the stored timestamp to a non-UTC offset string.
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        _ = conn.execute(
+            "UPDATE plugin_runs SET created_at = ?, updated_at = ? WHERE run_id = ?",
+            ("2026-05-01T12:00:00+05:00", "2026-05-01T12:00:00+05:00", "r1"),
+        )
+        conn.commit()
+
+    fetched = store.get_run("r1")
+    assert fetched is not None
+    expected_utc = datetime.datetime(2026, 5, 1, 7, 0, 0, tzinfo=datetime.UTC)
+    assert fetched.created_at == expected_utc
+    assert fetched.updated_at == expected_utc
