@@ -56,26 +56,6 @@ class PipelineValidationError(AttractorError):
         self.issues = list(issues)
 
 
-class UnknownNodeError(AttractorError):
-    """Raised when a referenced node_id does not exist in the pipeline (FR-004)."""
-
-
-class DanglingEdgeError(AttractorError):
-    """Raised when an edge references a node that does not exist (SC-007)."""
-
-
-class UnknownProfileError(AttractorError):
-    """Raised when a node names a profile not declared in the stylesheet (FR-019)."""
-
-
-class RunStateError(AttractorError):
-    """Raised on an illegal Run or RunNode state transition."""
-
-
-class TraversalError(AttractorError):
-    """Raised when traversal cannot continue (no selectable edge or inconsistent graph)."""
-
-
 class RepoPathConfinementError(AttractorError):
     """Raised when a caller-supplied repo_path is not confined to the allowed base directory.
 

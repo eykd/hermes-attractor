@@ -6,12 +6,7 @@ import pytest
 
 from hermes_attractor.domain.exceptions import (
     AttractorError,
-    DanglingEdgeError,
     PipelineValidationError,
-    RunStateError,
-    TraversalError,
-    UnknownNodeError,
-    UnknownProfileError,
     ValidationIssue,
 )
 
@@ -26,31 +21,6 @@ def test_attractor_error_is_exception() -> None:
 def test_pipeline_validation_error_subclasses_attractor_error() -> None:
     """PipelineValidationError must subclass AttractorError."""
     assert issubclass(PipelineValidationError, AttractorError)
-
-
-def test_unknown_node_error_subclasses_attractor_error() -> None:
-    """UnknownNodeError must subclass AttractorError."""
-    assert issubclass(UnknownNodeError, AttractorError)
-
-
-def test_dangling_edge_error_subclasses_attractor_error() -> None:
-    """DanglingEdgeError must subclass AttractorError."""
-    assert issubclass(DanglingEdgeError, AttractorError)
-
-
-def test_unknown_profile_error_subclasses_attractor_error() -> None:
-    """UnknownProfileError must subclass AttractorError."""
-    assert issubclass(UnknownProfileError, AttractorError)
-
-
-def test_run_state_error_subclasses_attractor_error() -> None:
-    """RunStateError must subclass AttractorError."""
-    assert issubclass(RunStateError, AttractorError)
-
-
-def test_traversal_error_subclasses_attractor_error() -> None:
-    """TraversalError must subclass AttractorError."""
-    assert issubclass(TraversalError, AttractorError)
 
 
 def test_validation_issue_has_element_id_and_reason() -> None:

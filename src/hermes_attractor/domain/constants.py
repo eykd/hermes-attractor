@@ -17,9 +17,6 @@ MAX_GUARD_DEPTH: int = 32
 #: Maximum fan-out width: number of concurrent branches spawned by a FAN_OUT node.
 MAX_FAN_OUT_WIDTH: int = 16
 
-#: Maximum number of live kanban cards per run at any given time (FR-016).
-MAX_LIVE_CARDS_PER_RUN: int = 256
-
 #: Batch size for reading events from the EventLog (research D6).
 EVENT_LOG_BATCH_SIZE: int = 100
 
