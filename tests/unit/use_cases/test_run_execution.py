@@ -1729,3 +1729,345 @@ def test_retry_path_triggered_via_dispatch_path_without_manual_goal_gate_injecti
     assert "attempt:2" in retry_card.idempotency_key.value, (
         "Retry card must have attempt:2 (next attempt after the first)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Bug (a): gate re-dispatched at attempt=1 on second iteration (FR-009/FR-024)
+# Bug (b): gate retry next_attempt counted from nodes_for_run before save_run (FR-024)
+# ---------------------------------------------------------------------------
+
+
+def _make_gate_pipeline_for_bug_tests() -> Pipeline:
+    """Build: start -> work -> gate -> exit (gate retries work on fail, max 3).
+
+    Used to drive the full dispatch path across two gate iterations.
+    """
+    start = Node(node_id="start", shape=NodeShape.START)
+    work = Node(node_id="work", shape=NodeShape.CODERGEN, profile="coder")
+    gate = Node(
+        node_id="gate",
+        shape=NodeShape.CODERGEN,
+        profile="reviewer",
+        goal_gate=GoalGatePolicy(retry_target="work", max_attempts=3),
+    )
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    edges = [
+        Edge(source_id="start", target_id="work"),
+        Edge(source_id="work", target_id="gate"),
+        Edge(source_id="gate", target_id="work", label="fail"),
+        Edge(source_id="gate", target_id="exit", label="pass"),
+    ]
+    return Pipeline(
+        spec_id="bug-gate-pipeline",
+        nodes=[start, work, gate, exit_],
+        edges=edges,
+        stylesheet=Stylesheet(rules=[StyleRule(selector="*", profile="default")]),
+    )
+
+
+def _dispatch_gate_after_work_1(
+    pipeline: Pipeline,
+    run: Run,
+    clock: MagicMock,
+) -> tuple[RunNode, RunNode]:
+    """Step 1 helper: work(1) completes; dispatch gate(1). Return (work_succeeded, gate_record_1).
+
+    Args:
+        pipeline: The pipeline domain object.
+        run: The Run domain object.
+        clock: The test clock mock.
+
+    Returns:
+        A tuple of (work_succeeded_1, gate_record_1) RunNodes.
+    """
+    upserted: list[RunNode] = []
+    work_record_1 = RunNode(
+        run_id=run.run_id,
+        node_id="work",
+        task_id="task-work-1",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=["start"],
+    )
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = work_record_1
+    run_state.get_run.return_value = run
+    run_state.upsert_node.side_effect = upserted.append
+    kanban = MagicMock()
+    kanban.create_card.return_value = "task-gate-1"
+
+    advance_on_completion(
+        card_result=CardResult(
+            task_id="task-work-1",
+            event_id=1,
+            event_kind="completed",
+            summary="Work done.",
+            metadata={},
+        ),
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    gate_nodes = [n for n in upserted if n.node_id == "gate"]
+    assert gate_nodes, "gate must be dispatched after work(1) completes"
+    gate_record_1 = gate_nodes[0]
+    assert gate_record_1.attempt == 1, "gate attempt must be 1 on first dispatch"
+    work_succeeded_1 = RunNode(
+        run_id=run.run_id,
+        node_id="work",
+        task_id="task-work-1",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=1,
+        parent_node_ids=["start"],
+    )
+    return work_succeeded_1, gate_record_1
+
+
+def _dispatch_work_retry_after_gate_1_fails(
+    pipeline: Pipeline,
+    run: Run,
+    clock: MagicMock,
+    work_succeeded_1: RunNode,
+    gate_record_1: RunNode,
+) -> RunNode:
+    """Step 2 helper: gate(1) fails; dispatch work(2). Return work_retry_record.
+
+    Args:
+        pipeline: The pipeline domain object.
+        run: The Run domain object.
+        clock: The test clock mock.
+        work_succeeded_1: The SUCCEEDED work RunNode from step 1.
+        gate_record_1: The gate RunNode dispatched in step 1.
+
+    Returns:
+        The work retry RunNode (attempt=2).
+    """
+    upserted: list[RunNode] = []
+    run_state = MagicMock()
+    run_state.get_node_by_task.return_value = gate_record_1
+    run_state.get_run.return_value = run
+    run_state.nodes_for_run.return_value = [work_succeeded_1, gate_record_1]
+    run_state.upsert_node.side_effect = upserted.append
+    kanban = MagicMock()
+    kanban.create_card.return_value = "task-work-2"
+
+    advance_on_completion(
+        card_result=CardResult(
+            task_id="task-gate-1",
+            event_id=2,
+            event_kind="completed",
+            summary="Gate failed.",
+            metadata={},
+        ),
+        kanban=kanban,
+        run_state=run_state,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    work_nodes = [n for n in upserted if n.node_id == "work"]
+    assert work_nodes, "work retry must be dispatched after gate(1) fails"
+    work_retry = work_nodes[0]
+    assert work_retry.attempt == 2, "work retry must be at attempt=2"
+    return work_retry
+
+
+def test_gate_second_iteration_dispatched_at_attempt_2_via_real_dispatch_path() -> None:
+    """Bug (a): gate must be dispatched at attempt=2 on the second gate iteration.
+
+    The bug: line ~714 computes ``attempt = 1`` for any next_node that differs from
+    node_record, so gate is always dispatched at attempt=1. The 2nd gate card then
+    shares the idempotency key with the 1st, and create_card returns the stale
+    completed task instead of a fresh one.
+
+    This test drives the full dispatch path (no manual RunNode state injection):
+    1. work(1) completes → gate(1) dispatched (via helper)
+    2. gate(1) fails → work(2) dispatched via retry path (via helper)
+    3. work(2) completes → gate must be dispatched at attempt=2 (not attempt=1)
+    """
+    pipeline = _make_gate_pipeline_for_bug_tests()
+    run = Run(
+        run_id="run-bug-a",
+        spec_id="bug-gate-pipeline",
+        status=RunStatus.RUNNING,
+        context=Context(data={}),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    work_succeeded_1, gate_record_1 = _dispatch_gate_after_work_1(pipeline, run, clock)
+    work_retry_record = _dispatch_work_retry_after_gate_1_fails(pipeline, run, clock, work_succeeded_1, gate_record_1)
+
+    # --- Step 3: work(2) completes; gate must be dispatched at attempt=2 ---
+    upserted_step3: list[RunNode] = []
+    gate_completed_1 = RunNode(
+        run_id="run-bug-a",
+        node_id="gate",
+        task_id="task-gate-1",
+        status=NodeRunStatus.PARTIAL,
+        attempt=1,
+        parent_node_ids=["work"],
+        goal_gate_policy=gate_record_1.goal_gate_policy,
+    )
+    run_state_3 = MagicMock()
+    run_state_3.get_node_by_task.return_value = work_retry_record
+    run_state_3.get_run.return_value = run
+    run_state_3.nodes_for_run.return_value = [work_succeeded_1, gate_completed_1, work_retry_record]
+    run_state_3.upsert_node.side_effect = upserted_step3.append
+    kanban_3 = MagicMock()
+    kanban_3.create_card.return_value = "task-gate-2"
+
+    advance_on_completion(
+        card_result=CardResult(
+            task_id="task-work-2",
+            event_id=3,
+            event_kind="completed",
+            summary="Work retry done.",
+            metadata={},
+        ),
+        kanban=kanban_3,
+        run_state=run_state_3,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    gate_nodes_step3 = [n for n in upserted_step3 if n.node_id == "gate"]
+    assert gate_nodes_step3, "gate must be dispatched after work(2) completes"
+    gate_record_2 = gate_nodes_step3[0]
+    assert gate_record_2.attempt == 2, (
+        f"gate must be dispatched at attempt=2 on second iteration; "
+        f"got attempt={gate_record_2.attempt}. "
+        "Bug: attempt=1 for any next_node that differs from node_record."
+    )
+    kanban_3.create_card.assert_called()
+    gate_card_2 = kanban_3.create_card.call_args[0][0]
+    assert "attempt:2" in gate_card_2.idempotency_key.value, (
+        f"Second gate card must use attempt:2 in its idempotency key; got {gate_card_2.idempotency_key.value!r}"
+    )
+    assert "attempt:1" not in gate_card_2.idempotency_key.value, (
+        "Second gate card must NOT reuse attempt:1 idempotency key"
+    )
+
+
+def test_gate_retry_crash_replay_does_not_create_duplicate_retry_row() -> None:
+    """Bug (b): replaying a gate-fail event must not create a second retry RunNode.
+
+    The bug: lines ~430-432 count nodes_for_run rows at retry_target BEFORE save_run.
+    After a crash-and-replay, the first execution's upsert_node has already persisted
+    the retry RunNode. On replay, nodes_for_run returns one more row, so next_attempt
+    is one higher, and upsert_node is called again with a different attempt number —
+    creating a duplicate coexisting retry row.
+
+    Fix: derive next_attempt from node_record.attempt + 1 (the gate node's own attempt
+    counter, which is stable across replays).
+
+    This test simulates the crash/replay by calling advance_on_completion twice with
+    the same gate-fail card_result. On the second call, nodes_for_run already includes
+    the retry RunNode written by the first call. Both calls must produce the same
+    next_attempt value and the same idempotency key.
+    """
+    pipeline = _make_gate_pipeline_for_bug_tests()
+    run = Run(
+        run_id="run-bug-b",
+        spec_id="bug-gate-pipeline",
+        status=RunStatus.RUNNING,
+        context=Context(data={}),
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+
+    # Gate (attempt=1) just failed. We have: work(1) SUCCEEDED, gate(1) PARTIAL.
+    work_succeeded = RunNode(
+        run_id="run-bug-b",
+        node_id="work",
+        task_id="task-work-1",
+        status=NodeRunStatus.SUCCEEDED,
+        attempt=1,
+        parent_node_ids=["start"],
+    )
+    gate_record = RunNode(
+        run_id="run-bug-b",
+        node_id="gate",
+        task_id="task-gate-1",
+        status=NodeRunStatus.RUNNING,
+        attempt=1,
+        parent_node_ids=["work"],
+        goal_gate_policy=GoalGatePolicy(retry_target="work", max_attempts=3),
+    )
+
+    gate_fail_result = CardResult(
+        task_id="task-gate-1",
+        event_id=5,
+        event_kind="completed",
+        summary="Gate failed.",
+        metadata={},  # no gate field => fail
+    )
+
+    # --- First call (normal processing) ---
+    upserted_first: list[RunNode] = []
+    run_state_first = MagicMock()
+    run_state_first.get_node_by_task.return_value = gate_record
+    run_state_first.get_run.return_value = run
+    # Before first call: only work(1) and gate(1) exist
+    run_state_first.nodes_for_run.return_value = [work_succeeded, gate_record]
+    run_state_first.upsert_node.side_effect = upserted_first.append
+    kanban_first = MagicMock()
+    kanban_first.create_card.return_value = "task-work-retry"
+
+    advance_on_completion(
+        card_result=gate_fail_result,
+        kanban=kanban_first,
+        run_state=run_state_first,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    retry_nodes_first = [n for n in upserted_first if n.node_id == "work" and n.attempt > 1]
+    assert retry_nodes_first, "First call must create a retry RunNode for work"
+    retry_first = retry_nodes_first[0]
+    first_attempt = retry_first.attempt
+    first_key = kanban_first.create_card.call_args[0][0].idempotency_key.value
+
+    # --- Second call (crash/replay) ---
+    # nodes_for_run NOW includes the retry RunNode written by the first call.
+    upserted_second: list[RunNode] = []
+    run_state_second = MagicMock()
+    run_state_second.get_node_by_task.return_value = gate_record
+    run_state_second.get_run.return_value = run
+    # On replay, the persisted retry row is already in the store.
+    run_state_second.nodes_for_run.return_value = [work_succeeded, gate_record, retry_first]
+    run_state_second.upsert_node.side_effect = upserted_second.append
+    kanban_second = MagicMock()
+    kanban_second.create_card.return_value = "task-work-retry-dup"
+
+    advance_on_completion(
+        card_result=gate_fail_result,
+        kanban=kanban_second,
+        run_state=run_state_second,
+        pipeline=pipeline,
+        clock=clock,
+    )
+
+    retry_nodes_second = [n for n in upserted_second if n.node_id == "work" and n.attempt > 1]
+    assert retry_nodes_second, "Second call (replay) must also produce a retry RunNode"
+    retry_second = retry_nodes_second[0]
+    second_attempt = retry_second.attempt
+    second_key = kanban_second.create_card.call_args[0][0].idempotency_key.value
+
+    # BUG (b): with the bug, second_attempt == first_attempt + 1 (count-before-save shifts)
+    # which means the replay creates a duplicate retry row with a different attempt number.
+    assert second_attempt == first_attempt, (
+        f"Replay must produce the same next_attempt as the first call; "
+        f"first={first_attempt}, second={second_attempt}. "
+        "Bug: next_attempt counted from nodes_for_run before save_run — "
+        "replay sees one more row and generates a higher attempt number."
+    )
+    assert second_key == first_key, (
+        f"Replay must produce the same idempotency key; first={first_key!r}, second={second_key!r}"
+    )

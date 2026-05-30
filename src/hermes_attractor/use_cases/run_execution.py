@@ -426,10 +426,13 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
         policy = node_record.goal_gate_policy
         retry_target = policy.retry_target
         retry_node = node_map.get(retry_target)
-        # Count previous attempts at the retry_target node.
-        all_nodes = run_state.nodes_for_run(run.run_id)
-        prev_attempts = sum(1 for n in all_nodes if n.node_id == retry_target)
-        next_attempt = prev_attempts + 1
+        # Derive next_attempt from the gate node's own attempt counter (FR-024).
+        # Using node_record.attempt + 1 is stable across crash/replay: the gate's
+        # RunNode attempt is written before this event is processed and does not
+        # change when nodes_for_run gains an extra retry row on replay.
+        # (Using nodes_for_run count here would shift next_attempt by +1 on replay
+        # because the already-persisted retry row is included in the second count.)
+        next_attempt = node_record.attempt + 1
         if next_attempt > policy.max_attempts:
             # Exhausted: block the run.
             blocked_run = Run(
@@ -711,7 +714,17 @@ def advance_on_completion(  # noqa: PLR0912, PLR0913, PLR0915, PLR0911, C901
             prompt_template = next_node.prompt or ""
             body = _expand_prompt(prompt_template, run.context.data)
             kind = _card_kind_for_node(next_node.shape)
-            attempt = node_record.attempt + 1 if next_node.node_id == node_record.node_id else 1
+            # Compute attempt by counting existing RunNode rows for next_node.node_id (FR-009/FR-024).
+            # Using the count from nodes_for_run (rather than node_record.attempt + 1 for same-node
+            # self-loops) ensures that when a gate's retry target is a different node, we still
+            # increment the attempt counter correctly across multiple gate iterations.
+            # The self-loop case (next_node == node_record) also works: count of existing rows
+            # equals node_record.attempt (the current row hasn't been marked SUCCEEDED yet? No —
+            # it has been upserted as SUCCEEDED at line 345). So count includes current node's row.
+            # We therefore use: attempt = 1 + count of existing rows for next_node.node_id.
+            all_nodes_for_next = run_state.nodes_for_run(run.run_id)
+            next_node_prev_count = sum(1 for n in all_nodes_for_next if n.node_id == next_node.node_id)
+            attempt = next_node_prev_count + 1
             key = IdempotencyKey.for_node(run.run_id, next_node.node_id, attempt)
             card = Card(
                 idempotency_key=key,
