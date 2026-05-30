@@ -115,12 +115,13 @@ Switching branches mid-run automatically follows the new branch's scope.
 
 ## Failure modes the orchestrator handles
 
-| Symptom                            | Resolution                                                        |
-| ---------------------------------- | ----------------------------------------------------------------- |
-| worker returns `FAILED <id>: ...`  | verify releases the claim; orchestrator moves on (next prep tick) |
-| prep returns the same `<id>` twice | hot-loop guard fires; orchestrator stops and surfaces             |
-| prep returns `QUEUE EMPTY`         | orchestrator announces "Queue drained" and stops                  |
-| user `^C`                          | session ends; no daemon to kill, no lockfile to clean             |
+| Symptom                                                | Resolution                                                                                                              |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| worker returns `FAILED <id>: ...`                      | verify releases the claim; orchestrator moves on (next prep tick)                                                      |
+| prep returns the same `<id>` twice                     | hot-loop guard fires; orchestrator stops and surfaces                                                                  |
+| prep reports `QUEUE EMPTY` while tasks are still ready | epic descendants are *dependents* — scope query uses `br dep tree --direction up` (not `down`); plus repair + re-query once before trusting empty (ralph-prep step 4) |
+| prep returns `QUEUE EMPTY`                             | orchestrator announces "Queue drained" and stops                                                                       |
+| user `^C`                                              | session ends; no daemon to kill, no lockfile to clean                                                                 |
 
 ## What goes away vs. the old ralph
 

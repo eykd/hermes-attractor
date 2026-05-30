@@ -11,9 +11,11 @@ requires-python = ">=3.11,<3.12"
 authors = [
     {name = "David Eyk", email = "david@worldsenoughstudios.com"},
 ]
-dependencies = []
+dependencies = [
+    "pydot>=3.0.0",
+]
 
-[project.entry-points."hermes.plugins"]
+[project.entry-points."hermes_agent.plugins"]
 attractor = "hermes_attractor.plugin:register"
 
 [project.urls]
@@ -133,6 +135,10 @@ include = ["src", "tests"]
 exclude = [
     "src/hermes_attractor/_version.py",
     "**/__pycache__",
+    # hermes_cli is not in locked deps; pyright cannot resolve it.
+    # The integration test is verified separately via:
+    #   uv run --with hermes-agent==0.15.2 pytest tests/integration/test_hermes_runtime_contract.py
+    "tests/integration/test_hermes_runtime_contract.py",
 ]
 typeCheckingMode = "strict"
 # Paranoid escalations beyond strict:

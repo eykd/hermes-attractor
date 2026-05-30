@@ -1,0 +1,8 @@
+;=============================================
+; Run resumes after gateway restart without re-executing completed nodes.
+;=============================================
+GIVEN a running pipeline that has completed some nodes.
+WHEN the Hermes gateway is killed and restarted mid-run.
+THEN the run resumes from the correct position.
+THEN already-completed nodes are not re-executed.
+THEN the run reaches the same final outcome as it would have without the restart.

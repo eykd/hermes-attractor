@@ -1,0 +1,15 @@
+;=============================================
+; Tool node runs deterministic work and updates the shared context.
+;=============================================
+GIVEN a pipeline containing a tool node with a registered deterministic tool.
+WHEN traversal reaches the tool node.
+THEN the deterministic tool is invoked with the current context.
+THEN the tool result updates the shared context.
+THEN traversal continues to the next node.
+
+;=============================================
+; Unknown tool name is a validation error at authoring time.
+;=============================================
+GIVEN a pipeline containing a tool node referencing an unregistered tool name.
+WHEN attractor_validate is called.
+THEN the result is valid:false with issues naming the node and the unknown tool name.

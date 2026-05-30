@@ -5,7 +5,7 @@
 `hermes-attractor` is a **Hermes Agent plugin** (`attractor`) built on a hexagonal core.
 The plugin's real logic lives in `src/hermes_attractor/` as pure Python; the Hermes
 runtime coupling is isolated to a thin `plugin/` shim. It ships via a pip entry point
-(`hermes.plugins` group) and is symlinked into `.hermes/plugins/attractor` for local dev.
+(`hermes_agent.plugins` group) and is symlinked into `.hermes/plugins/attractor` for local dev.
 
 ## Active Technologies
 
@@ -103,8 +103,9 @@ The `.beads/` directory is git-tracked.
 ## Open items (Hermes runtime integration)
 
 The `hermes` CLI is **not yet installed**, so live plugin loading is unverified:
-- The exact `hermes.plugins` entry-point group string and the `plugin.yaml` manifest
-  schema are assumptions — reconcile with Hermes docs/source once available.
+- The entry-point group has been reconciled to `hermes_agent.plugins` (was `hermes.plugins`)
+  based on research findings (R-EP). The `plugin.yaml` manifest schema is still an assumption
+  — reconcile with Hermes docs/source once available.
 - `src/hermes_attractor/ports/hermes.py::PluginContext` encodes our assumed registration
   API. Revisit when the real Hermes context is available.
 - Local dev discovery uses the `.hermes/plugins/attractor` symlink (no entry point needed).

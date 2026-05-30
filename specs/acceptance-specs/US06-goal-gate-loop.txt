@@ -1,0 +1,29 @@
+;=============================================
+; Goal gate routes back to retry target when not yet satisfied.
+;=============================================
+GIVEN a pipeline with a goal-gated node that has not yet succeeded.
+WHEN traversal reaches the goal-gated node and the gate result is fail.
+THEN the run is routed back to the configured retry target rather than exiting.
+THEN a new iteration card is created at the retry target with the next attempt number.
+
+;=============================================
+; Goal gate exits only when the gated node succeeds.
+;=============================================
+GIVEN a pipeline with a goal-gated node that has previously failed and is retrying.
+WHEN the gate result is pass.
+THEN traversal proceeds past the gate toward the exit.
+
+;=============================================
+; Goal gate exhaustion transitions run to BLOCKED.
+;=============================================
+GIVEN a pipeline with a goal-gated node whose max_attempts is exhausted.
+WHEN the gate result is fail and no attempts remain.
+THEN the run transitions to BLOCKED with a structured reason.
+THEN no further iteration cards are created.
+
+;=============================================
+; Missing or malformed gate verdict is treated as fail.
+;=============================================
+GIVEN a pipeline with a goal-gated node.
+WHEN the card completes with a missing or malformed gate verdict field.
+THEN the result is treated as a gate fail and the run routes back to the retry target.

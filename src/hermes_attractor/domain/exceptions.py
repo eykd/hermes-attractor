@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
 
 class AttractorError(Exception):
     """Base class for all domain errors raised by hermes_attractor."""
@@ -9,3 +15,51 @@ class AttractorError(Exception):
 
 class InvalidEchoError(AttractorError):
     """Raised when an echo message fails validation."""
+
+
+@dataclass(frozen=True)
+class ValidationIssue:
+    """A single structured validation failure for a pipeline element.
+
+    Attributes:
+        element_id: The node_id or edge identifier that failed validation.
+        reason: A human-readable description of why validation failed.
+    """
+
+    element_id: str
+    reason: str
+
+
+class PipelineValidationError(AttractorError):
+    """Raised when pipeline validation fails; aggregates structured ValidationIssues.
+
+    Prefer calling ``Pipeline.validate()`` (which returns issues rather than raising)
+    and only raising this when a hard failure boundary is required (e.g. a tool handler
+    receiving an invalid pipeline from the LLM).
+
+    Attributes:
+        issues: The list of ValidationIssue instances describing each failure.
+    """
+
+    def __init__(
+        self,
+        issues: Sequence[ValidationIssue],
+        message: str = "Pipeline validation failed",
+    ) -> None:
+        """Initialise with a sequence of validation issues and an optional message.
+
+        Args:
+            issues: One or more ValidationIssue describing what failed.
+            message: Human-readable summary; defaults to "Pipeline validation failed".
+        """
+        super().__init__(message)
+        self.issues = list(issues)
+
+
+class RepoPathConfinementError(AttractorError):
+    """Raised when a caller-supplied repo_path is not confined to the allowed base directory.
+
+    This protects against path-traversal attacks where a malicious or buggy caller
+    supplies an absolute path or a path with ``..`` segments that would allow git
+    operations to reach arbitrary filesystem locations.
+    """

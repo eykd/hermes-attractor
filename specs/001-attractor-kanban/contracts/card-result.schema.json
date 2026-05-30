@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hermes-attractor/contracts/card-result.schema.json",
+  "title": "CardResult / Gate verdict",
+  "description": "Structured completion result a worker writes to a kanban card; the plugin parses it into a domain Outcome. Gate cards carry the goal-gate verdict (research D4).",
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["success", "partial", "fail", "retry"],
+      "description": "Node-level status mapped to the domain NodeStatus."
+    },
+    "preferred_label": {
+      "type": ["string", "null"],
+      "description": "Routing hint: preferred outgoing edge label (FR-007)."
+    },
+    "suggested_next": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Routing hint: suggested next node ids (FR-007)."
+    },
+    "context_updates": {
+      "type": "object",
+      "description": "Context key/value updates applied before traversal continues (FR-008). JSON-serializable values only."
+    },
+    "gate": {
+      "type": "string",
+      "enum": ["pass", "fail"],
+      "description": "Goal-gate verdict (gate cards only, FR-009)."
+    },
+    "score": {
+      "type": "number",
+      "description": "Optional gate score."
+    },
+    "reasons": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Why the gate passed/failed."
+    },
+    "required_changes": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Corrections fed into the next iteration card on gate fail."
+    }
+  },
+  "required": ["status"],
+  "additionalProperties": true
+}

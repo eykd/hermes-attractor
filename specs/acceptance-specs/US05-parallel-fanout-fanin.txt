@@ -1,0 +1,17 @@
+;=============================================
+; Parallel fan-out creates sibling cards and fan-in merges their context contributions.
+;=============================================
+GIVEN a pipeline with a parallel fan-out leading to independent branch nodes and a fan-in.
+WHEN the pipeline runs.
+THEN the fan-out creates sibling kanban cards for each independent branch.
+THEN the branches can execute concurrently.
+THEN the fan-in resolves only after all branch completions have been received.
+THEN context contributions from all branches are merged before traversal continues.
+
+;=============================================
+; Conflicting context keys from parallel branches are recorded under _merge_conflicts.
+;=============================================
+GIVEN a pipeline with a parallel fan-out where two branches write to the same context key.
+WHEN both branches complete and the fan-in merges their contexts.
+THEN the merged context contains the last-branch-wins value for the conflicting key.
+THEN the conflict is recorded under the _merge_conflicts reserved context key.

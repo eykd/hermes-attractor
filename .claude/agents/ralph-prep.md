@@ -76,24 +76,41 @@ SCOPE=${SCOPE:-ALL}
 whose title starts with `[sp:` (those belong to orchestrators, not workers).
 If `SCOPE` is an epic ID, intersect with that epic's recursive descendants.
 
+Note: beads (`br`) stores the parent→child hierarchy as a `parent-child`
+*dependency* edge pointing from the child to the epic, so an epic's
+descendants are its **dependents** — reachable via `--direction up`, not
+`down`. `down` returns only what the epic itself waits on (usually nothing),
+which silently yields an empty candidate set and a false `QUEUE EMPTY`.
+
 ```bash
-br ready --sort priority --json > /tmp/ralph-ready.json
+build_candidates() {
+  br ready --sort priority --json > /tmp/ralph-ready.json
+  if [ "$SCOPE" = "ALL" ]; then
+    jq -r '
+      map(select(.issue_type != "epic" and (.title | startswith("[sp:") | not)))
+      | .[].id' /tmp/ralph-ready.json
+  else
+    br dep tree "$SCOPE" --direction up --json > /tmp/ralph-scope.json 2>/dev/null || echo '{}' > /tmp/ralph-scope.json
+    jq -r '.. | objects | .id? // empty' /tmp/ralph-scope.json | sort -u > /tmp/ralph-scope-ids.txt
+    jq -r --slurpfile scope <(jq -R . /tmp/ralph-scope-ids.txt | jq -s .) '
+      map(select(.issue_type != "epic" and (.title | startswith("[sp:") | not)))
+      | .[]
+      | select(.id as $id | ($scope[0] | index($id)))
+      | .id' /tmp/ralph-ready.json
+  fi
+}
 
-if [ "$SCOPE" = "ALL" ]; then
-  CANDIDATES=$(jq -r '
-    map(select(.issue_type != "epic" and (.title | startswith("[sp:") | not)))
-    | .[].id' /tmp/ralph-ready.json)
-else
-  br dep tree "$SCOPE" --direction down --json > /tmp/ralph-scope.json 2>/dev/null || echo '{}' > /tmp/ralph-scope.json
-  jq -r '.. | objects | .id? // empty' /tmp/ralph-scope.json | sort -u > /tmp/ralph-scope-ids.txt
-  CANDIDATES=$(jq -r --slurpfile scope <(jq -R . /tmp/ralph-scope-ids.txt | jq -s .) '
-    map(select(.issue_type != "epic" and (.title | startswith("[sp:") | not)))
-    | .[]
-    | select(.id as $id | ($scope[0] | index($id)))
-    | .id' /tmp/ralph-ready.json)
+NEXT_ID=$(build_candidates | head -n1)
+
+# `br ready` / the dep-tree scope query can also read a stale SQLite index and
+# report empty while tasks are still ready. Before trusting an empty result,
+# repair the index and re-query once — only a confirmed-empty second pass
+# counts as QUEUE EMPTY.
+if [ -z "$NEXT_ID" ]; then
+  br doctor --repair >/dev/null 2>&1 || true
+  br doctor --repair >/dev/null 2>&1 || true
+  NEXT_ID=$(build_candidates | head -n1)
 fi
-
-NEXT_ID=$(printf '%s\n' "$CANDIDATES" | head -n1)
 ```
 
 (If the `jq --slurpfile` line is awkward in practice, a simpler shell loop
