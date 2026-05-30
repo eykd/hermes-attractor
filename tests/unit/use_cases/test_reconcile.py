@@ -322,6 +322,7 @@ def test_reconcile_run_does_nothing_when_events_empty() -> None:
 
     run_state = MagicMock()
     run_state.active_runs.return_value = [run]
+    run_state.get_run.return_value = run
 
     event_log = MagicMock()
     # Active run but no new events since cursor 42.
@@ -347,3 +348,237 @@ def test_reconcile_run_does_nothing_when_events_empty() -> None:
     # Pipeline must NOT be loaded when there are no events to process.
     store.load.assert_not_called()
     kanban.create_card.assert_not_called()
+
+
+def test_reconcile_scopes_events_to_owning_run() -> None:
+    """Each terminal event is advanced only against its owning run, not any other run.
+
+    Two concurrent active runs (run-A and run-B) with interleaved events:
+    - event_id=1 belongs to run-A (task-A1)
+    - event_id=2 belongs to run-B (task-B1)
+    - event_id=3 belongs to run-A (task-A2)
+
+    Assertions:
+    - run-A's advance_fn is called exactly for events 1 and 3 (not 2).
+    - run-B's advance_fn is called exactly for event 2 (not 1 or 3).
+    - The cursor re-read via get_run is used instead of the snapshot.
+    """
+    pipeline_a = _make_pipeline(spec_id="spec-a")
+    pipeline_b = _make_pipeline(spec_id="spec-b")
+
+    run_a = _make_run(run_id="run-a", spec_id="spec-a", last_seen_event_id=0)
+    run_b = _make_run(run_id="run-b", spec_id="spec-b", last_seen_event_id=0)
+
+    node_a1 = _make_run_node(run_id="run-a", node_id="work", task_id="task-A1")
+    node_a2 = _make_run_node(run_id="run-a", node_id="work", task_id="task-A2")
+    node_b1 = _make_run_node(run_id="run-b", node_id="work", task_id="task-B1")
+
+    event_a1 = CardResult(task_id="task-A1", event_id=1, event_kind="completed", summary="A1", metadata={})
+    event_b1 = CardResult(task_id="task-B1", event_id=2, event_kind="completed", summary="B1", metadata={})
+    event_a2 = CardResult(task_id="task-A2", event_id=3, event_kind="completed", summary="A2", metadata={})
+
+    # All three events appear in the global event log since cursor=0.
+    all_events = [event_a1, event_b1, event_a2]
+
+    run_state = MagicMock()
+    run_state.active_runs.return_value = [run_a, run_b]
+
+    # get_run always returns the fresh run (cursor unchanged for this test).
+    def _get_run(run_id: str) -> Run:
+        """Return run_a for run-a, run_b for anything else."""
+        return run_a if run_id == "run-a" else run_b
+
+    # get_node_by_task resolves each task to its owning run's node.
+    def _get_node_by_task(task_id: str) -> RunNode | None:
+        """Return the RunNode for the given task_id."""
+        return {
+            "task-A1": node_a1,
+            "task-A2": node_a2,
+            "task-B1": node_b1,
+        }.get(task_id)
+
+    run_state.get_run.side_effect = _get_run
+    run_state.get_node_by_task.side_effect = _get_node_by_task
+    run_state.nodes_for_run.return_value = []
+
+    event_log = MagicMock()
+    event_log.read_since.return_value = all_events
+
+    kanban = MagicMock()
+    kanban.create_card.return_value = "task-next"
+
+    serializer = MagicMock()
+
+    def _parse(dot: str) -> Pipeline:
+        """Return pipeline_a if spec-a appears in the dot string, else pipeline_b."""
+        return pipeline_a if "spec-a" in dot else pipeline_b
+
+    store = MagicMock()
+
+    def _load(spec_id: str) -> str:
+        """Return a stub DOT string encoding the spec_id."""
+        return f"digraph {spec_id} {{}}"
+
+    serializer.parse.side_effect = _parse
+    store.load.side_effect = _load
+
+    clock = MagicMock()
+    clock.now.return_value = _LATER
+
+    # Track which card_results are passed to advance_fn and for which run's pipeline.
+    advance_calls: list[tuple[str, str]] = []  # (task_id, pipeline.spec_id)
+
+    def _tracking_advance_fn(
+        *,
+        card_result: CardResult,
+        kanban: object,
+        run_state: object,
+        pipeline: Pipeline,
+        clock: object,
+    ) -> None:
+        """Record which (task_id, pipeline.spec_id) pairs are advanced."""
+        advance_calls.append((card_result.task_id, pipeline.spec_id))
+
+    reconcile(
+        run_state=run_state,
+        event_log=event_log,
+        serializer=serializer,
+        store=store,
+        kanban=kanban,
+        clock=clock,
+        advance_fn=_tracking_advance_fn,
+    )
+
+    # Each event must be advanced against the pipeline of its OWNING run.
+    assert ("task-A1", "spec-a") in advance_calls, "event for run-A must use run-A's pipeline"
+    assert ("task-A2", "spec-a") in advance_calls, "second run-A event must use run-A's pipeline"
+    assert ("task-B1", "spec-b") in advance_calls, "event for run-B must use run-B's pipeline"
+
+    # run-A events must NOT be advanced against run-B's pipeline and vice-versa.
+    assert ("task-A1", "spec-b") not in advance_calls, "run-A event must not use run-B's pipeline"
+    assert ("task-A2", "spec-b") not in advance_calls, "run-A event must not use run-B's pipeline"
+    assert ("task-B1", "spec-a") not in advance_calls, "run-B event must not use run-A's pipeline"
+
+    # Each event must be advanced exactly once in total.
+    assert advance_calls.count(("task-A1", "spec-a")) == 1, "task-A1 advanced exactly once"
+    assert advance_calls.count(("task-A2", "spec-a")) == 1, "task-A2 advanced exactly once"
+    assert advance_calls.count(("task-B1", "spec-b")) == 1, "task-B1 advanced exactly once"
+
+    # get_run must be called to re-read each run's current cursor (not trust snapshot).
+    run_state.get_run.assert_called()
+
+
+def test_reconcile_skips_run_that_disappeared_after_snapshot() -> None:
+    """Reconcile skips a run whose get_run returns None after active_runs() listed it."""
+    run = _make_run(run_id="vanished", status=RunStatus.RUNNING)
+
+    run_state = MagicMock()
+    run_state.active_runs.return_value = [run]
+    # Simulate the run having been deleted between active_runs() and get_run().
+    run_state.get_run.return_value = None
+
+    event_log = MagicMock()
+    kanban = MagicMock()
+    serializer = MagicMock()
+    store = MagicMock()
+    clock = MagicMock()
+    clock.now.return_value = _LATER
+
+    reconcile(
+        run_state=run_state,
+        event_log=event_log,
+        serializer=serializer,
+        store=store,
+        kanban=kanban,
+        clock=clock,
+        advance_fn=advance_on_completion,
+    )
+
+    # The disappeared run must not trigger any event processing.
+    event_log.read_since.assert_not_called()
+    kanban.create_card.assert_not_called()
+
+
+def test_reconcile_skips_run_that_became_terminal_after_snapshot() -> None:
+    """Reconcile skips a run that transitioned to terminal between snapshot and re-read.
+
+    active_runs() lists a RUNNING run, but by the time get_run() is called it has
+    been marked SUCCEEDED (e.g., advanced by another process). Reconcile must not
+    process any events for it.
+    """
+    snapshot_run = _make_run(run_id="run-concurrent", status=RunStatus.RUNNING)
+    current_run = _make_run(run_id="run-concurrent", status=RunStatus.SUCCEEDED)
+
+    run_state = MagicMock()
+    run_state.active_runs.return_value = [snapshot_run]
+    run_state.get_run.return_value = current_run  # re-read shows terminal status
+
+    event_log = MagicMock()
+    kanban = MagicMock()
+    serializer = MagicMock()
+    store = MagicMock()
+    clock = MagicMock()
+    clock.now.return_value = _LATER
+
+    reconcile(
+        run_state=run_state,
+        event_log=event_log,
+        serializer=serializer,
+        store=store,
+        kanban=kanban,
+        clock=clock,
+        advance_fn=advance_on_completion,
+    )
+
+    event_log.read_since.assert_not_called()
+    kanban.create_card.assert_not_called()
+
+
+def test_reconcile_skips_events_that_belong_to_other_runs() -> None:
+    """Reconcile does not advance a run when all events in the log belong to other runs.
+
+    A single active run-A exists. The event log contains only events for run-B.
+    After read_since returns events, none of them are owned by run-A (resolved
+    via get_node_by_task), so the pipeline is never loaded and advance_fn is never
+    called for run-A.
+    """
+    run_a = _make_run(run_id="run-a", spec_id="spec-a", last_seen_event_id=0)
+    node_b = _make_run_node(run_id="run-b", node_id="work", task_id="task-B1")
+
+    event_for_b = CardResult(task_id="task-B1", event_id=7, event_kind="completed", summary="B done", metadata={})
+
+    run_state = MagicMock()
+    run_state.active_runs.return_value = [run_a]
+    run_state.get_run.return_value = run_a
+    run_state.get_node_by_task.return_value = node_b  # resolves to run-B, not run-A
+
+    event_log = MagicMock()
+    event_log.read_since.return_value = [event_for_b]
+
+    kanban = MagicMock()
+    serializer = MagicMock()
+    store = MagicMock()
+    clock = MagicMock()
+    clock.now.return_value = _LATER
+
+    advance_calls: list[str] = []
+
+    def _noop_advance(**kwargs: object) -> None:
+        """Record any advance call (should never be called here)."""
+        result = kwargs.get("card_result")
+        if hasattr(result, "task_id"):
+            advance_calls.append(str(result.task_id))  # type: ignore[union-attr]
+
+    reconcile(
+        run_state=run_state,
+        event_log=event_log,
+        serializer=serializer,
+        store=store,
+        kanban=kanban,
+        clock=clock,
+        advance_fn=_noop_advance,
+    )
+
+    # No events belong to run-A, so pipeline should never be loaded.
+    store.load.assert_not_called()
+    assert advance_calls == [], "advance_fn must not be called for foreign-run events"

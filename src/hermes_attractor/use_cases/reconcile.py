@@ -78,14 +78,29 @@ def reconcile(  # noqa: PLR0913
     if not active_runs:
         return
 
-    for run in active_runs:
-        if run.status in _TERMINAL_STATUSES:
-            _log.debug("reconcile: skipping terminal run %s (status=%s)", run.run_id, run.status)
+    for snapshot_run in active_runs:
+        if snapshot_run.status in _TERMINAL_STATUSES:
+            _log.debug("reconcile: skipping terminal run %s (status=%s)", snapshot_run.run_id, snapshot_run.status)
+            continue
+
+        # Re-read the run's current state (including cursor) from the store immediately
+        # before processing, so we never trust a stale snapshot cursor (FR-024 / bug b).
+        current_run = run_state.get_run(snapshot_run.run_id)
+        if current_run is None:
+            _log.warning("reconcile: run %s disappeared between active_runs() and get_run()", snapshot_run.run_id)
+            continue
+        if current_run.status in _TERMINAL_STATUSES:
+            _log.debug(
+                "reconcile: skipping terminal run %s (status=%s, re-read)",
+                current_run.run_id,
+                current_run.status,
+            )
             continue
 
         _reconcile_run(
-            last_seen_event_id=run.last_seen_event_id,
-            spec_id=run.spec_id,
+            run_id=current_run.run_id,
+            last_seen_event_id=current_run.last_seen_event_id,
+            spec_id=current_run.spec_id,
             run_state=run_state,
             event_log=event_log,
             serializer=serializer,
@@ -98,6 +113,7 @@ def reconcile(  # noqa: PLR0913
 
 def _reconcile_run(  # noqa: PLR0913
     *,
+    run_id: str,
     last_seen_event_id: int,
     spec_id: str,
     run_state: RunStateStore,
@@ -110,8 +126,17 @@ def _reconcile_run(  # noqa: PLR0913
 ) -> None:
     """Process all unprocessed events for a single run.
 
-    Reads the EventLog from the cursor and advances the run for each event.
+    Reads the EventLog from the cursor and advances the run only for events that
+    belong to this run (resolved via ``get_node_by_task``). Events belonging to
+    other runs are skipped — they will be processed when that run is reconciled.
     The cursor is advanced atomically by ``advance_fn`` as its last write.
+
+    **Event ownership scoping** (FR-024 / SC-003): the EventLog is a global
+    append-only log. ``read_since`` returns ALL terminal events past the cursor,
+    regardless of which run they belong to. To avoid advancing run A's pipeline
+    with run B's events, each event is resolved to its owning run via
+    ``get_node_by_task``. Only events whose owning run matches ``run_id`` are
+    processed here; mismatched events are silently skipped.
 
     **Reducer / idempotency property**: processing the same event twice yields the
     same net state as processing it once. This follows from:
@@ -129,6 +154,7 @@ def _reconcile_run(  # noqa: PLR0913
     value, so the event is re-processed on the next reconcile call (safe replay).
 
     Args:
+        run_id: The run identifier, used to filter events by ownership.
         last_seen_event_id: The current replay cursor for this run.
         spec_id: The pipeline spec identifier (for loading the DOT).
         run_state: The RunStateStore port.
@@ -144,11 +170,23 @@ def _reconcile_run(  # noqa: PLR0913
     if not events:
         return
 
+    # Filter to events that belong to this run.
+    # The EventLog is global; we must resolve each event's owning run via
+    # get_node_by_task before dispatching to avoid cross-run cursor contamination
+    # (FR-024 / SC-003).
+    owned_events = [
+        card_result
+        for card_result in events
+        if (node := run_state.get_node_by_task(card_result.task_id)) is not None and node.run_id == run_id
+    ]
+    if not owned_events:
+        return
+
     # Load the pipeline once for this run's batch.
     dot = store.load(spec_id)
     pipeline = serializer.parse(dot)
 
-    for card_result in events:
+    for card_result in owned_events:
         advance_fn(
             card_result=card_result,
             kanban=kanban,
