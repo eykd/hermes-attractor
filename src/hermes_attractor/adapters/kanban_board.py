@@ -32,8 +32,8 @@ _FIELD_TASK_ID = "task_id"
 
 #: Gate-verdict trust policy (plan.md §Security §Gate-verdict trust):
 #:   A missing or malformed ``gate`` field in the card result metadata is treated
-#:   as a FAIL verdict, never as a PASS. Use-cases applying ``to_outcome()``
-#:   MUST default to fail-secure when the gate field is absent or unparseable.
+#:   as a FAIL verdict, never as a PASS. See ``_gate_verdict_pass()`` in
+#:   ``run_execution.py`` which enforces this fail-secure policy.
 
 
 class HermesKanbanBoard:
