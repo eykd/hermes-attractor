@@ -341,3 +341,35 @@ ATTRACTOR_RESULT_SCHEMA: dict[str, object] = {
         "additionalProperties": False,
     },
 }
+
+ATTRACTOR_PROVISION_PROFILES_SCHEMA: dict[str, object] = {
+    "name": "attractor_provision_profiles",
+    "description": (
+        "Create the Hermes profiles a pipeline names but the host is missing, so the "
+        "pipeline can run. Each new profile clones an existing profile's config (model "
+        "included); already-present profiles are left untouched. Run this when "
+        "attractor_run reports unknown/uninstalled profiles."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "spec_id": {
+                "type": "string",
+                "description": "Pipeline spec identifier whose profiles to provision.",
+            },
+            "repo_path": {
+                "type": "string",
+                "description": "Optional path to the git repository root.",
+            },
+            "base_profile": {
+                "type": "string",
+                "description": (
+                    "Optional existing profile to clone each new profile's config from "
+                    "(model, env, skills). Defaults to the active profile."
+                ),
+            },
+        },
+        "required": ["spec_id"],
+        "additionalProperties": False,
+    },
+}

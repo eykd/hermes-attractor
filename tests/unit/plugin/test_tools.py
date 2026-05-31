@@ -24,6 +24,7 @@ from hermes_attractor.plugin.tools import (
     handle_attractor_add_edge,
     handle_attractor_add_node,
     handle_attractor_create_graph,
+    handle_attractor_provision_profiles,
     handle_attractor_remove_edge,
     handle_attractor_remove_node,
     handle_attractor_result,
@@ -310,6 +311,40 @@ def test_handle_attractor_result_never_raises() -> None:
     """handle_attractor_result returns a JSON string and never raises (M2 stub)."""
     response = handle_attractor_result({"run_id": "some-run-id"})
     _ = _assert_json_response(response)
+
+
+def test_handle_attractor_provision_profiles_never_raises() -> None:
+    """handle_attractor_provision_profiles returns a JSON string and never raises."""
+    response = handle_attractor_provision_profiles({"spec_id": "x"})
+    _ = _assert_json_response(response)
+
+
+def test_attractor_provision_profiles_handler_creates_missing_and_reports() -> None:
+    """The handler provisions the pipeline's missing profiles and returns a created/existing report."""
+    pipeline = _make_pipeline()  # one worker node with profile "coder"
+    serializer = MagicMock()
+    serializer.parse.return_value = pipeline
+    store = MagicMock()
+    store.load.return_value = "digraph spec-a {}"
+    registry = MagicMock()
+    registry.exists.return_value = False  # "coder" is missing on the host
+    provisioner = MagicMock()
+
+    raw = handle_attractor_provision_profiles(
+        {"spec_id": "spec-a"},
+        store=store,
+        serializer=serializer,
+        registry=registry,
+        provisioner=provisioner,
+    )
+
+    payload = json.loads(raw)
+    assert payload["ok"] is True
+    result = payload["result"]
+    assert result["spec_id"] == "spec-a"
+    assert result["created"] == ["coder"]
+    assert result["existing"] == []
+    provisioner.create.assert_called_once_with("coder")
 
 
 def test_handle_attractor_set_stylesheet_ok(tmp_path: Path) -> None:

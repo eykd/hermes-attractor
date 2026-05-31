@@ -30,6 +30,7 @@ provides_tools:
   - attractor_run
   - attractor_status
   - attractor_result
+  - attractor_provision_profiles
 provides_hooks:
   - post_tool_call
   - on_session_start

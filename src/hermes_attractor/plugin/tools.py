@@ -17,6 +17,7 @@ from hermes_attractor import __version__
 from hermes_attractor.adapters.dot_serializer import PydotSerializer
 from hermes_attractor.adapters.kanban_board import HermesKanbanBoard
 from hermes_attractor.adapters.pipeline_store import GitPipelineStore
+from hermes_attractor.adapters.profile_provisioner import HermesProfileProvisioner
 from hermes_attractor.adapters.profile_registry import HermesProfileRegistry
 from hermes_attractor.adapters.renderer import TextRenderer
 from hermes_attractor.adapters.run_state_store import SqliteRunStateStore
@@ -35,6 +36,7 @@ from hermes_attractor.use_cases.authoring import (
 )
 from hermes_attractor.use_cases.echo import echo
 from hermes_attractor.use_cases.health import check_health
+from hermes_attractor.use_cases.provisioning import provision_profiles
 from hermes_attractor.use_cases.run_execution import launch_run, query_run_result, query_run_status
 
 if TYPE_CHECKING:
@@ -44,6 +46,7 @@ if TYPE_CHECKING:
     from hermes_attractor.ports.dot import DotSerializer
     from hermes_attractor.ports.kanban import KanbanBoard
     from hermes_attractor.ports.pipeline_store import PipelineStore
+    from hermes_attractor.ports.profile_provisioner import ProfileProvisioner
     from hermes_attractor.ports.profile_registry import ProfileRegistry
     from hermes_attractor.ports.run_state import RunStateStore
 
@@ -427,5 +430,49 @@ def handle_attractor_result(
         run_id = str(args["run_id"])
         _run_state = run_state if run_state is not None else _make_run_state_store()
         return query_run_result(run_id=run_id, run_state=_run_state)
+
+    return _safe(_produce)
+
+
+def handle_attractor_provision_profiles(
+    args: dict[str, object],
+    *,
+    store: PipelineStore | None = None,
+    serializer: DotSerializer | None = None,
+    registry: ProfileRegistry | None = None,
+    provisioner: ProfileProvisioner | None = None,
+) -> str:
+    """Handle the ``attractor_provision_profiles`` tool: create a pipeline's missing profiles.
+
+    Expected inputs: spec_id (str), optional repo_path (str), optional base_profile (str).
+    Result: {spec_id, created: [str], existing: [str]}.
+
+    Args:
+        args: Tool input dict containing ``spec_id`` and optionally ``repo_path`` / ``base_profile``.
+        store: Optional PipelineStore override (for testing).
+        serializer: Optional DotSerializer override (for testing).
+        registry: Optional ProfileRegistry override (for testing).
+        provisioner: Optional ProfileProvisioner override (for testing).
+    """
+
+    def _produce() -> dict[str, object]:
+        spec_id = str(args["spec_id"])
+        _store = store if store is not None else _make_store(args)
+        _serializer = serializer if serializer is not None else PydotSerializer()
+        pipeline = _serializer.parse(_store.load(spec_id))
+
+        _registry = registry if registry is not None else HermesProfileRegistry()
+        if provisioner is not None:
+            _provisioner = provisioner
+        else:
+            base_raw = args.get("base_profile")
+            _provisioner = HermesProfileProvisioner(clone_from=str(base_raw) if base_raw else None)
+
+        report = provision_profiles(
+            profiles=pipeline.resolved_worker_profiles().values(),
+            registry=_registry,
+            provisioner=_provisioner,
+        )
+        return {"spec_id": spec_id, **report}
 
     return _safe(_produce)

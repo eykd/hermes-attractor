@@ -127,7 +127,11 @@ no model key). `just test-hermes` runs just the integration subset.
 - Run-launch rejects pipelines naming a profile absent from the host (FR-004 / unknown-profile
   edge case): `launch_run` takes a `ProfileRegistry`; `adapters/profile_registry.py::HermesProfileRegistry`
   wraps `hermes_cli.profiles.profile_exists` (`default` always exists; others ⇒
-  `HERMES_HOME/profiles/<name>/`).
+  `HERMES_HOME/profiles/<name>/`). The escape hatch is the `attractor_provision_profiles` tool —
+  it creates a pipeline's missing profiles (`use_cases/provisioning.py` over
+  `adapters/profile_provisioner.py::HermesProfileProvisioner` → `create_profile(clone_config=True)`),
+  cloning the active profile so each new profile gets a working model. Differentiate models afterward
+  by editing each `HERMES_HOME/profiles/<name>/config.yaml` `model.default`.
 - All `hermes_cli` / `tools.registry` imports are **lazy** (inside functions, via `importlib`),
   so production modules import cleanly without the package as a runtime dep and pyright (run in
   the locked env) does not statically resolve them. The runtime entry points (`post_tool_call_hook`,
