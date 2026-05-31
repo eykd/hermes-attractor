@@ -15,8 +15,11 @@ dependencies = [
     "pydot>=3.0.0",
 ]
 
+# Hermes loads this via importlib.metadata: it does ``ep.load()`` then
+# ``getattr(module, "register")``, so the value must reference the MODULE (not
+# ``:register``) — otherwise ``ep.load()`` returns the function and the lookup fails.
 [project.entry-points."hermes_agent.plugins"]
-attractor = "hermes_attractor.plugin:register"
+attractor = "hermes_attractor.plugin"
 
 [project.urls]
 Repository = "https://github.com/eykd/hermes-attractor"
