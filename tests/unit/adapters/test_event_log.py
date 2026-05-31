@@ -1,11 +1,12 @@
-"""Unit tests for the EventLog port and Hermes event-log adapter (RED phase M3 US3).
+"""Unit tests for the EventLog port and Hermes event-log adapter.
 
-Tests fail until ports/event_log.py and adapters/event_log.py are implemented.
+``HermesEventLog`` maps terminal ``task_events`` rows (supplied by a TaskEventReader)
+to domain ``CardResult`` objects. These tests inject a fake reader.
 """
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -14,12 +15,40 @@ from hermes_attractor.domain.card import CardResult
 from hermes_attractor.domain.constants import EVENT_LOG_BATCH_SIZE
 from hermes_attractor.ports.event_log import EventLog
 
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
 pytestmark = pytest.mark.unit
 
 #: Terminal event kinds per the contract spec.
 _TERMINAL_KINDS = {"completed", "blocked", "gave_up", "crashed", "timed_out"}
-#: Non-terminal event kinds that should be filtered out.
-_NON_TERMINAL_KINDS = {"started", "assigned", "updated", "commented"}
+
+
+class _FakeReader:
+    """A fake TaskEventReader that returns preset rows and records its call args."""
+
+    def __init__(self, events: Sequence[Mapping[str, object]]) -> None:
+        """Initialise with the event rows to return.
+
+        Args:
+            events: The rows ``read_terminal_events`` should return.
+        """
+        super().__init__()
+        self._events = events
+        self.calls: list[dict[str, int]] = []
+
+    def read_terminal_events(self, *, after_event_id: int, limit: int) -> Sequence[Mapping[str, object]]:
+        """Record the call args and return the preset rows.
+
+        Args:
+            after_event_id: The replay cursor passed by the adapter.
+            limit: The batch-size limit passed by the adapter.
+
+        Returns:
+            The preset event rows.
+        """
+        self.calls.append({"after_event_id": after_event_id, "limit": limit})
+        return self._events
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +68,7 @@ def test_event_log_protocol_has_read_since() -> None:
 
 
 def _make_event(task_id: str, event_id: int, kind: str) -> dict[str, object]:
-    """Build a raw Hermes event dict for testing.
+    """Build a normalized event-row dict for testing.
 
     Args:
         task_id: The task identifier.
@@ -47,7 +76,7 @@ def _make_event(task_id: str, event_id: int, kind: str) -> dict[str, object]:
         kind: The event kind string.
 
     Returns:
-        A dict simulating a Hermes event payload.
+        A dict matching the TaskEventReader row contract.
     """
     return {
         "task_id": task_id,
@@ -60,14 +89,14 @@ def _make_event(task_id: str, event_id: int, kind: str) -> dict[str, object]:
 
 def test_read_since_returns_terminal_events_ordered_by_event_id() -> None:
     """HermesEventLog.read_since returns terminal CardResults ordered by event_id."""
-    raw_events = [
-        _make_event("task-001", 5, "completed"),
-        _make_event("task-002", 7, "blocked"),
-        _make_event("task-003", 9, "gave_up"),
-    ]
-    tool_client = MagicMock()
-    tool_client.call.return_value = {"events": raw_events}
-    log = HermesEventLog(tool_client=tool_client)
+    reader = _FakeReader(
+        [
+            _make_event("task-003", 9, "gave_up"),
+            _make_event("task-001", 5, "completed"),
+            _make_event("task-002", 7, "blocked"),
+        ]
+    )
+    log = HermesEventLog(reader=reader)
 
     results = log.read_since(last_seen_event_id=0)
 
@@ -78,16 +107,16 @@ def test_read_since_returns_terminal_events_ordered_by_event_id() -> None:
 
 
 def test_read_since_filters_out_non_terminal_events() -> None:
-    """HermesEventLog.read_since filters out non-terminal event kinds."""
-    raw_events = [
-        _make_event("task-001", 1, "started"),  # non-terminal
-        _make_event("task-002", 2, "completed"),  # terminal
-        _make_event("task-003", 3, "assigned"),  # non-terminal
-        _make_event("task-004", 4, "timed_out"),  # terminal
-    ]
-    tool_client = MagicMock()
-    tool_client.call.return_value = {"events": raw_events}
-    log = HermesEventLog(tool_client=tool_client)
+    """HermesEventLog.read_since filters out non-terminal event kinds defensively."""
+    reader = _FakeReader(
+        [
+            _make_event("task-001", 1, "started"),  # non-terminal
+            _make_event("task-002", 2, "completed"),  # terminal
+            _make_event("task-003", 3, "assigned"),  # non-terminal
+            _make_event("task-004", 4, "timed_out"),  # terminal
+        ]
+    )
+    log = HermesEventLog(reader=reader)
 
     results = log.read_since(last_seen_event_id=0)
 
@@ -98,14 +127,14 @@ def test_read_since_filters_out_non_terminal_events() -> None:
 
 def test_read_since_returns_only_events_after_cursor() -> None:
     """HermesEventLog.read_since only returns events with event_id > last_seen_event_id."""
-    raw_events = [
-        _make_event("task-001", 10, "completed"),
-        _make_event("task-002", 15, "blocked"),
-        _make_event("task-003", 20, "completed"),
-    ]
-    tool_client = MagicMock()
-    tool_client.call.return_value = {"events": raw_events}
-    log = HermesEventLog(tool_client=tool_client)
+    reader = _FakeReader(
+        [
+            _make_event("task-001", 10, "completed"),
+            _make_event("task-002", 15, "blocked"),
+            _make_event("task-003", 20, "completed"),
+        ]
+    )
+    log = HermesEventLog(reader=reader)
 
     # Request events after event_id=12; should get 15 and 20 only.
     results = log.read_since(last_seen_event_id=12)
@@ -116,25 +145,20 @@ def test_read_since_returns_only_events_after_cursor() -> None:
     assert 20 in event_ids
 
 
-def test_read_since_passes_last_event_id_to_hermes_tool() -> None:
-    """HermesEventLog.read_since passes last_seen_event_id to the Hermes tool call."""
-    tool_client = MagicMock()
-    tool_client.call.return_value = {"events": []}
-    log = HermesEventLog(tool_client=tool_client)
+def test_read_since_passes_cursor_and_batch_size_to_reader() -> None:
+    """HermesEventLog.read_since passes the cursor and batch-size limit to the reader."""
+    reader = _FakeReader([])
+    log = HermesEventLog(reader=reader)
 
     _ = log.read_since(last_seen_event_id=42)
 
-    tool_client.call.assert_called_once()
-    call_args = tool_client.call.call_args
-    # The cursor should be passed to the tool call.
-    assert 42 in call_args.args or any(v == 42 for v in call_args.kwargs.values())
+    assert reader.calls == [{"after_event_id": 42, "limit": EVENT_LOG_BATCH_SIZE}]
 
 
 def test_read_since_returns_empty_when_no_events() -> None:
     """HermesEventLog.read_since returns an empty sequence when no events exist."""
-    tool_client = MagicMock()
-    tool_client.call.return_value = {"events": []}
-    log = HermesEventLog(tool_client=tool_client)
+    reader = _FakeReader([])
+    log = HermesEventLog(reader=reader)
 
     results = log.read_since(last_seen_event_id=0)
 
@@ -142,57 +166,33 @@ def test_read_since_returns_empty_when_no_events() -> None:
 
 
 def test_read_since_reads_in_batches_capped_at_batch_size() -> None:
-    """HermesEventLog.read_since issues batched reads of at most EVENT_LOG_BATCH_SIZE events."""
+    """HermesEventLog.read_since requests at most EVENT_LOG_BATCH_SIZE events per call."""
     assert EVENT_LOG_BATCH_SIZE == 100, "EVENT_LOG_BATCH_SIZE must be 100 per spec"
 
-    # Return exactly one batch worth of events.
     raw_events = [_make_event(f"task-{i:03d}", i + 1, "completed") for i in range(EVENT_LOG_BATCH_SIZE)]
-    tool_client = MagicMock()
-    tool_client.call.return_value = {"events": raw_events}
-    log = HermesEventLog(tool_client=tool_client)
+    reader = _FakeReader(raw_events)
+    log = HermesEventLog(reader=reader)
 
     results = log.read_since(last_seen_event_id=0)
 
     assert len(results) == EVENT_LOG_BATCH_SIZE
-    # Verify the batch size limit is passed in the tool call.
-    call_args = tool_client.call.call_args
-    assert EVENT_LOG_BATCH_SIZE in call_args.args or any(v == EVENT_LOG_BATCH_SIZE for v in call_args.kwargs.values())
-
-
-def test_read_since_handles_non_dict_response_gracefully() -> None:
-    """HermesEventLog.read_since returns empty sequence when response is not a dict."""
-    tool_client = MagicMock()
-    tool_client.call.return_value = None  # non-dict response
-    log = HermesEventLog(tool_client=tool_client)
-
-    results = log.read_since(last_seen_event_id=0)
-
-    assert list(results) == []
-
-
-def test_read_since_handles_non_list_events_field_gracefully() -> None:
-    """HermesEventLog.read_since returns empty sequence when 'events' is not a list."""
-    tool_client = MagicMock()
-    tool_client.call.return_value = {"events": "not-a-list"}
-    log = HermesEventLog(tool_client=tool_client)
-
-    results = log.read_since(last_seen_event_id=0)
-
-    assert list(results) == []
+    assert reader.calls[0]["limit"] == EVENT_LOG_BATCH_SIZE
 
 
 def test_read_since_handles_non_dict_metadata_in_event() -> None:
-    """HermesEventLog.read_since uses empty dict when event metadata is not a dict."""
-    raw_event = {
-        "task_id": "task-001",
-        "event_id": 5,
-        "kind": "completed",
-        "summary": "Done.",
-        "metadata": "not-a-dict",  # malformed metadata
-    }
-    tool_client = MagicMock()
-    tool_client.call.return_value = {"events": [raw_event]}
-    log = HermesEventLog(tool_client=tool_client)
+    """HermesEventLog.read_since uses empty dict when an event's metadata is not a dict."""
+    reader = _FakeReader(
+        [
+            {
+                "task_id": "task-001",
+                "event_id": 5,
+                "kind": "completed",
+                "summary": "Done.",
+                "metadata": "not-a-dict",  # malformed metadata
+            }
+        ]
+    )
+    log = HermesEventLog(reader=reader)
 
     results = log.read_since(last_seen_event_id=0)
 
@@ -202,16 +202,18 @@ def test_read_since_handles_non_dict_metadata_in_event() -> None:
 
 def test_read_since_maps_event_fields_to_card_result() -> None:
     """HermesEventLog.read_since correctly maps raw event fields to CardResult."""
-    raw_event = {
-        "task_id": "task-xyz",
-        "event_id": 99,
-        "kind": "completed",
-        "summary": "All done.",
-        "metadata": {"score": 1.0},
-    }
-    tool_client = MagicMock()
-    tool_client.call.return_value = {"events": [raw_event]}
-    log = HermesEventLog(tool_client=tool_client)
+    reader = _FakeReader(
+        [
+            {
+                "task_id": "task-xyz",
+                "event_id": 99,
+                "kind": "completed",
+                "summary": "All done.",
+                "metadata": {"score": 1.0},
+            }
+        ]
+    )
+    log = HermesEventLog(reader=reader)
 
     results = log.read_since(last_seen_event_id=0)
 

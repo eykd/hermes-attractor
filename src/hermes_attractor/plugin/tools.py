@@ -7,6 +7,7 @@ this module is the composition root that wires in concrete adapters.
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 from pathlib import Path
@@ -14,9 +15,11 @@ from typing import TYPE_CHECKING, cast
 
 from hermes_attractor import __version__
 from hermes_attractor.adapters.dot_serializer import PydotSerializer
+from hermes_attractor.adapters.kanban_board import HermesKanbanBoard
 from hermes_attractor.adapters.pipeline_store import GitPipelineStore
 from hermes_attractor.adapters.renderer import TextRenderer
 from hermes_attractor.adapters.run_state_store import SqliteRunStateStore
+from hermes_attractor.adapters.runtime_tool_client import RuntimeToolClient
 from hermes_attractor.adapters.system_clock import SystemClock
 from hermes_attractor.domain.pipeline import NodeShape, StyleRule
 from hermes_attractor.use_cases.authoring import (
@@ -65,6 +68,21 @@ def _make_run_state_store() -> SqliteRunStateStore:
     env_db = os.environ.get("ATTRACTOR_DB_PATH")
     db_path = Path(env_db) if env_db else Path.cwd() / "attractor_runs.db"
     return SqliteRunStateStore(db_path=db_path)
+
+
+def _runtime_kanban() -> KanbanBoard:  # pragma: no cover - requires the live hermes runtime
+    """Build a KanbanBoard over the live Hermes tool registry dispatch.
+
+    Used by ``handle_attractor_run`` when no kanban override is injected: the runtime
+    tool registry (not in the locked deps) is imported by name via ``importlib`` and
+    wrapped in a :class:`RuntimeToolClient`. See research §Phase 1 (A).
+
+    Returns:
+        A HermesKanbanBoard bound to the live runtime dispatch seam.
+    """
+    registry = importlib.import_module("tools.registry").registry
+    dispatch = cast("Callable[..., str]", registry.dispatch)
+    return HermesKanbanBoard(tool_client=RuntimeToolClient(dispatch=dispatch))
 
 
 def _make_store(args: dict[str, object]) -> GitPipelineStore:
@@ -345,11 +363,7 @@ def handle_attractor_run(  # noqa: PLR0913
 
         _run_state = run_state if run_state is not None else _make_run_state_store()
 
-        if kanban is not None:
-            _kanban = kanban
-        else:
-            msg = "kanban tool client not configured"
-            raise RuntimeError(msg)
+        _kanban = kanban if kanban is not None else _runtime_kanban()
 
         return launch_run(
             spec_id=spec_id,

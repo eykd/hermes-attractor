@@ -135,10 +135,12 @@ include = ["src", "tests"]
 exclude = [
     "src/hermes_attractor/_version.py",
     "**/__pycache__",
-    # hermes_cli is not in locked deps; pyright cannot resolve it.
-    # The integration test is verified separately via:
-    #   uv run --with hermes-agent==0.15.2 pytest tests/integration/test_hermes_runtime_contract.py
+    # hermes_cli / tools.registry are not in locked deps; pyright cannot resolve them.
+    # These integration tests are verified separately via:
+    #   uv run --with hermes-agent==0.15.2 pytest tests/integration -v -m integration
     "tests/integration/test_hermes_runtime_contract.py",
+    "tests/integration/test_reconcile_runtime.py",
+    "tests/integration/conftest.py",
 ]
 typeCheckingMode = "strict"
 # Paranoid escalations beyond strict:

@@ -29,6 +29,10 @@ test-cov:
     uv run pytest -v --cov --cov-report=html
     @echo "Coverage report generated at htmlcov/index.html"
 
+# Run the live hermes-agent integration suite (transient install; opt-in, no model key)
+test-hermes:
+    uv run --with hermes-agent==0.15.2 pytest tests/integration -v -m integration --no-cov
+
 # Run CI suite (lint + type check + test)
 ci:
     just lint

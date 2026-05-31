@@ -100,15 +100,30 @@ br sync --flush-only     # flush state to .beads/ (git-friendly JSONL)
 
 The `.beads/` directory is git-tracked.
 
-## Open items (Hermes runtime integration)
+## Hermes runtime integration (verified against `hermes-agent==0.15.2`)
 
-The `hermes` CLI is **not yet installed**, so live plugin loading is unverified:
-- The entry-point group has been reconciled to `hermes_agent.plugins` (was `hermes.plugins`)
-  based on research findings (R-EP). The `plugin.yaml` manifest schema is still an assumption
-  — reconcile with Hermes docs/source once available.
-- `src/hermes_attractor/ports/hermes.py::PluginContext` encodes our assumed registration
-  API. Revisit when the real Hermes context is available.
-- Local dev discovery uses the `.hermes/plugins/attractor` symlink (no entry point needed).
+The plugin's registration surface and kanban execution substrate are **verified against the
+real package**, exercised by an opt-in, hermetic live suite (kept out of locked deps):
+
+```bash
+just test-hermes   # ≡ uv run --with hermes-agent==0.15.2 pytest tests/integration -v -m integration
+```
+
+- `register(ctx)` on the real `hermes_cli.plugins.PluginContext` registers all 13 tools, the
+  `on_session_start` reconcile hook, and the `attractor-reconcile` CLI command. The
+  `ports/hermes.py::PluginContext` signatures mirror 0.15.2.
+- Reconcile is driven via the verified `tools.registry.registry.dispatch(name, args)` seam
+  (`adapters/runtime_tool_client.py`) and the kanban `task_events` log read directly from the
+  DB (`adapters/task_event_reader.py`); see `specs/001-attractor-kanban/research-hermes-kanban.md`
+  §Phase 1 for the verified tool names/params/schema.
+- All `hermes_cli` / `tools.registry` imports are **lazy** (inside functions, via `importlib`),
+  so production modules import cleanly without the package and the 100% default coverage run
+  excludes only the thin `# pragma: no cover` runtime builders.
+
+Still **unverified** (no live `hermes` CLI session here): end-to-end entry-point *discovery*
+(the live suite constructs `PluginContext`/`PluginManager` directly) and the `plugin.yaml`
+manifest schema. The entry-point group is `hermes_agent.plugins`; local dev discovery uses the
+`.hermes/plugins/attractor` symlink.
 
 ## Meta-conventions
 

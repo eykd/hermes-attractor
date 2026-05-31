@@ -80,7 +80,25 @@ uv run pytest -m unit         # by marker
 uv run pytest -x --lf         # stop on first failure / last failed
 just test                     # full gate
 just test-quick               # no coverage
+just test-hermes              # live hermes-agent integration suite (see below)
 ```
+
+### Live hermes-agent integration suite (opt-in)
+
+`hermes-agent` is **not** in locked deps, so the hermes-coupled integration tests
+(`test_hermes_runtime_contract.py`, `test_reconcile_runtime.py`) `pytest.importorskip` and
+**skip** under the default `uv run pytest` (which still enforces 100% coverage on everything
+else). Run them against the real package with:
+
+```bash
+just test-hermes   # ≡ uv run --with hermes-agent==0.15.2 pytest tests/integration -v -m integration
+```
+
+These are **hermetic and repeatable**: `tests/integration/conftest.py` isolates each test to a
+fresh `tmp_path` `HERMES_HOME` + kanban DB (no `hermes setup`, no model key). `conftest.py`
+fixtures import `hermes_cli` / `tools` lazily so the file still imports cleanly without the
+package. New hermes-coupled test files must be added to the `[tool.pyright]` `exclude` list
+(pyright runs in the locked, hermes-free env and cannot resolve those imports).
 
 ## Applicable skills
 

@@ -289,11 +289,12 @@ def test_handle_attractor_add_and_remove_edge_ok(tmp_path: Path) -> None:
 
 
 def test_handle_attractor_run_never_raises() -> None:
-    """handle_attractor_run returns a JSON string and never raises (M2 stub).
+    """handle_attractor_run returns a JSON string and never raises.
 
     Omitting repo_path causes _make_store to use cwd (default); omitting run_state
-    exercises the SqliteRunStateStore branch; no kanban triggers the RuntimeError branch.
-    All paths are caught by _safe and returned as ok:false.
+    exercises the SqliteRunStateStore branch; with no kanban override the handler takes
+    the ``_runtime_kanban()`` branch, whose lazy ``tools.registry`` import is unavailable
+    in the locked (hermes-free) env. All paths are caught by _safe and returned as ok:false.
     """
     response = handle_attractor_run({"spec_id": "x"})
     _ = _assert_json_response(response)

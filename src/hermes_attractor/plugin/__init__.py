@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from hermes_attractor.plugin import schemas, tools
+from hermes_attractor.plugin import reconcile, schemas, tools
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -52,10 +52,11 @@ def _runtime(handler: Callable[[dict[str, object]], str]) -> ToolHandler:
 
 
 def register(ctx: PluginContext) -> None:
-    """Register all attractor plugin tools with the Hermes host.
+    """Register all attractor plugin tools, hooks, and CLI commands with the Hermes host.
 
-    Registers 13 tools: health, echo, and the 11 attractor authoring/execution
-    tools.  Hook and CLI-command registration is deferred to Part B.
+    Registers 13 tools (health, echo, and the 11 attractor authoring/execution tools),
+    the ``on_session_start`` reconcile hook, and the ``attractor-reconcile`` CLI command
+    (zym.29 Part B).
     """
     # -- Utility tools -------------------------------------------------------
     ctx.register_tool(
@@ -139,4 +140,14 @@ def register(ctx: PluginContext) -> None:
         _TOOLSET,
         schemas.ATTRACTOR_RESULT_SCHEMA,
         _runtime(tools.handle_attractor_result),
+    )
+
+    # -- Part B: reconcile hook + CLI command --------------------------------
+    ctx.register_hook("on_session_start", reconcile.reconcile_hook)
+    ctx.register_cli_command(
+        "attractor-reconcile",
+        help="Replay kanban completion events and advance active attractor runs.",
+        setup_fn=reconcile.reconcile_setup,
+        handler_fn=reconcile.reconcile_cli_handler,
+        description="Reconcile attractor runs against the durable kanban task_events log.",
     )
