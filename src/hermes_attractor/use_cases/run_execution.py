@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from hermes_attractor.ports.dot import DotSerializer
     from hermes_attractor.ports.kanban import KanbanBoard
     from hermes_attractor.ports.pipeline_store import PipelineStore
+    from hermes_attractor.ports.profile_registry import ProfileRegistry
     from hermes_attractor.ports.run_state import RunStateStore
     from hermes_attractor.ports.tool_node import ToolNodeRegistry
 
@@ -183,6 +184,7 @@ def launch_run(  # noqa: PLR0913
     serializer: DotSerializer,
     store: PipelineStore,
     clock: Clock,
+    profile_registry: ProfileRegistry | None = None,
 ) -> dict[str, object]:
     """Launch a new pipeline run from a given spec.
 
@@ -197,6 +199,9 @@ def launch_run(  # noqa: PLR0913
         serializer: The DotSerializer port for parsing the DOT source.
         store: The PipelineStore port for loading the DOT source.
         clock: The Clock port for timestamps.
+        profile_registry: Optional ProfileRegistry; when provided, the run is rejected if any
+            worker node names a profile that does not exist on the host (FR-004 /
+            unknown-profile edge case). When ``None`` the existence check is skipped.
 
     Returns:
         A dict with ``run_id`` (str) and ``status`` (str) keys.
@@ -210,6 +215,21 @@ def launch_run(  # noqa: PLR0913
     if issues:
         msg = f"Pipeline '{spec_id}' is invalid: {len(issues)} issue(s)"
         raise PipelineValidationError(issues=issues, message=msg)
+
+    # Reject runs naming profiles that don't exist on the host, so we never dispatch a card
+    # to a profile the kanban dispatcher will never spawn (FR-004 / unknown-profile edge case).
+    if profile_registry is not None:
+        unknown = [
+            ValidationIssue(
+                element_id=node_id,
+                reason=f"Node '{node_id}' names profile '{profile}' which does not exist on the host",
+            )
+            for node_id, profile in pipeline.resolved_worker_profiles().items()
+            if not profile_registry.exists(profile)
+        ]
+        if unknown:
+            msg = f"Pipeline '{spec_id}' names {len(unknown)} unknown profile(s)"
+            raise PipelineValidationError(issues=unknown, message=msg)
 
     ctx = Context(data=initial_context)
     run_id = str(uuid.uuid4())

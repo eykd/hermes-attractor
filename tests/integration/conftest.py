@@ -44,6 +44,9 @@ def hermes_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """
     home = tmp_path / "home"
     home.mkdir()
+    # Define the profiles the integration pipelines assign, so run-launch profile-existence
+    # validation passes (hermes_cli.profiles.profile_exists checks HERMES_HOME/profiles/<name>).
+    (home / "profiles" / "coder").mkdir(parents=True)
     kanban_db_path = tmp_path / "kanban.db"
     monkeypatch.setenv("HERMES_HOME", str(home))
     monkeypatch.setenv("HERMES_KANBAN_DB", str(kanban_db_path))

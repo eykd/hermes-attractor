@@ -238,6 +238,22 @@ def _find_reachable(start_id: str, adjacency: Mapping[str, list[str]]) -> frozen
     return frozenset(visited)
 
 
+#: Node shapes that carry a profile (dispatched as profile-assigned cards / inline work).
+#: Single source of truth for "which nodes need a resolved, existing profile" — used by
+#: ``_validate_profiles`` (structural: a profile is assigned) and by run-launch
+#: profile-existence validation (the named profile actually exists on the host).
+_WORKER_SHAPES: frozenset[NodeShape] = frozenset(
+    {
+        NodeShape.CODERGEN,
+        NodeShape.CONDITIONAL,
+        NodeShape.TOOL,
+        NodeShape.FAN_OUT,
+        NodeShape.FAN_IN,
+        NodeShape.HUMAN,
+    }
+)
+
+
 @dataclass(frozen=True)
 class Pipeline:
     """The Attractor pipeline aggregate root (FR-004, FR-007, FR-019).
@@ -499,14 +515,6 @@ class Pipeline:
         Returns:
             List of ValidationIssue for nodes with no resolved profile.
         """
-        worker_shapes = {
-            NodeShape.CODERGEN,
-            NodeShape.CONDITIONAL,
-            NodeShape.TOOL,
-            NodeShape.FAN_OUT,
-            NodeShape.FAN_IN,
-            NodeShape.HUMAN,
-        }
         return [
             ValidationIssue(
                 element_id=node.node_id,
@@ -516,8 +524,26 @@ class Pipeline:
                 ),
             )
             for node in self.nodes
-            if node.shape in worker_shapes and not self.resolve_profile(node)
+            if node.shape in _WORKER_SHAPES and not self.resolve_profile(node)
         ]
+
+    def resolved_worker_profiles(self) -> dict[str, str]:
+        """Return ``{node_id: resolved_profile}`` for worker nodes that have a profile.
+
+        Used by run-launch profile-existence validation (FR-004 / unknown-profile edge
+        case): each returned profile must exist on the host before the run dispatches.
+        Worker nodes with no resolved profile are caught earlier by ``validate()``.
+
+        Returns:
+            A mapping of worker node id to its resolved (non-empty) profile name.
+        """
+        resolved: dict[str, str] = {}
+        for node in self.nodes:
+            if node.shape in _WORKER_SHAPES:
+                profile = self.resolve_profile(node)
+                if profile:
+                    resolved[node.node_id] = profile
+        return resolved
 
     def resolve_profile(self, node: Node) -> str | None:
         """Return the resolved profile for a node (FR-019 overrides FR-020).

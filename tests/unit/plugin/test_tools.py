@@ -361,6 +361,8 @@ def test_attractor_run_handler_returns_ok_json_with_run_id_and_status() -> None:
     serializer.parse.return_value = pipeline
     store = MagicMock()
     store.load.return_value = "digraph spec-a {}"
+    profile_registry = MagicMock()
+    profile_registry.exists.return_value = True
 
     raw = handle_attractor_run(
         {"spec_id": "spec-a", "context": {"task": "write tests"}},
@@ -369,6 +371,7 @@ def test_attractor_run_handler_returns_ok_json_with_run_id_and_status() -> None:
         serializer=serializer,
         store=store,
         clock=clock,
+        profile_registry=profile_registry,
     )
 
     payload = json.loads(raw)

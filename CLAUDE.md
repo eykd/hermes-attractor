@@ -119,11 +119,15 @@ no model key). `just test-hermes` runs just the integration subset.
   §Phase 1 for the verified tool names/params/schema. `post_tool_call` is gated to
   `kanban_complete`; other terminal kinds (blocked/crashed/timed_out/gave_up) are handled by the
   recovery path.
+- Run-launch rejects pipelines naming a profile absent from the host (FR-004 / unknown-profile
+  edge case): `launch_run` takes a `ProfileRegistry`; `adapters/profile_registry.py::HermesProfileRegistry`
+  wraps `hermes_cli.profiles.profile_exists` (`default` always exists; others ⇒
+  `HERMES_HOME/profiles/<name>/`).
 - All `hermes_cli` / `tools.registry` imports are **lazy** (inside functions, via `importlib`),
   so production modules import cleanly without the package as a runtime dep and pyright (run in
   the locked env) does not statically resolve them. The runtime entry points (`post_tool_call_hook`,
-  `reconcile_hook`, `attractor-reconcile` handler, `_runtime_*` builders) are covered end-to-end by
-  the integration suite — no `# pragma: no cover` on hermes seams.
+  `reconcile_hook`, `attractor-reconcile` handler, `_runtime_*` builders, `HermesProfileRegistry`)
+  are covered end-to-end by the integration suite — no `# pragma: no cover` on hermes seams.
 
 Still **unverified** (no live `hermes` CLI session here): end-to-end entry-point *discovery*
 (the live suite constructs `PluginContext`/`PluginManager` directly) and the `plugin.yaml`

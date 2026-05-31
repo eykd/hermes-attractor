@@ -17,6 +17,7 @@ from hermes_attractor import __version__
 from hermes_attractor.adapters.dot_serializer import PydotSerializer
 from hermes_attractor.adapters.kanban_board import HermesKanbanBoard
 from hermes_attractor.adapters.pipeline_store import GitPipelineStore
+from hermes_attractor.adapters.profile_registry import HermesProfileRegistry
 from hermes_attractor.adapters.renderer import TextRenderer
 from hermes_attractor.adapters.run_state_store import SqliteRunStateStore
 from hermes_attractor.adapters.runtime_tool_client import RuntimeToolClient
@@ -43,6 +44,7 @@ if TYPE_CHECKING:
     from hermes_attractor.ports.dot import DotSerializer
     from hermes_attractor.ports.kanban import KanbanBoard
     from hermes_attractor.ports.pipeline_store import PipelineStore
+    from hermes_attractor.ports.profile_registry import ProfileRegistry
     from hermes_attractor.ports.run_state import RunStateStore
 
 
@@ -335,6 +337,7 @@ def handle_attractor_run(  # noqa: PLR0913
     serializer: DotSerializer | None = None,
     store: PipelineStore | None = None,
     clock: Clock | None = None,
+    profile_registry: ProfileRegistry | None = None,
 ) -> str:
     """Handle the ``attractor_run`` tool: launch a new pipeline run.
 
@@ -347,6 +350,8 @@ def handle_attractor_run(  # noqa: PLR0913
         serializer: Optional DotSerializer override (for testing).
         store: Optional PipelineStore override (for testing).
         clock: Optional Clock override (for testing).
+        profile_registry: Optional ProfileRegistry override (for testing); defaults to the
+            host-backed :class:`HermesProfileRegistry` so unknown profiles are rejected.
     """
 
     def _produce() -> dict[str, object]:
@@ -366,6 +371,8 @@ def handle_attractor_run(  # noqa: PLR0913
 
         _kanban = kanban if kanban is not None else _runtime_kanban()
 
+        _profile_registry = profile_registry if profile_registry is not None else HermesProfileRegistry()
+
         return launch_run(
             spec_id=spec_id,
             initial_context=initial_context,
@@ -374,6 +381,7 @@ def handle_attractor_run(  # noqa: PLR0913
             serializer=_serializer,
             store=_store,
             clock=_clock,
+            profile_registry=_profile_registry,
         )
 
     return _safe(_produce)

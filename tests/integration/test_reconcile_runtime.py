@@ -29,6 +29,7 @@ pytest.importorskip("tools.registry")
 
 from hermes_attractor.adapters.dot_serializer import PydotSerializer
 from hermes_attractor.adapters.pipeline_store import GitPipelineStore
+from hermes_attractor.adapters.profile_registry import HermesProfileRegistry
 from hermes_attractor.adapters.run_state_store import SqliteRunStateStore
 from hermes_attractor.adapters.system_clock import SystemClock
 from hermes_attractor.domain.pipeline import NodeShape
@@ -53,13 +54,21 @@ pytestmark = pytest.mark.integration
 # ---------------------------------------------------------------------------
 
 
-def _author_linear_pipeline(store: GitPipelineStore, serializer: PydotSerializer, spec_id: str) -> None:
+def _author_linear_pipeline(
+    store: GitPipelineStore,
+    serializer: PydotSerializer,
+    spec_id: str,
+    *,
+    profile: str = "coder",
+) -> None:
     """Author a START -> node_a -> node_b -> EXIT pipeline via the authoring use cases.
 
     Args:
         store: The pipeline store to persist into.
         serializer: The DOT serializer.
         spec_id: The pipeline identifier.
+        profile: The profile assigned to the worker nodes (default ``"coder"``, which the
+            ``hermes_home`` fixture configures).
     """
     create_graph(spec_id=spec_id, store=store, serializer=serializer)
     add_node(spec_id=spec_id, node_id="start", shape=NodeShape.START, store=store, serializer=serializer)
@@ -68,7 +77,7 @@ def _author_linear_pipeline(store: GitPipelineStore, serializer: PydotSerializer
         node_id="node_a",
         shape=NodeShape.CODERGEN,
         prompt="Do step A.",
-        profile="coder",
+        profile=profile,
         store=store,
         serializer=serializer,
     )
@@ -77,7 +86,7 @@ def _author_linear_pipeline(store: GitPipelineStore, serializer: PydotSerializer
         node_id="node_b",
         shape=NodeShape.CODERGEN,
         prompt="Do step B.",
-        profile="coder",
+        profile=profile,
         store=store,
         serializer=serializer,
     )
@@ -307,3 +316,28 @@ def test_attractor_run_builds_runtime_kanban_when_unset(
 
     assert payload["ok"] is True, payload
     assert "run_id" in payload["result"]
+
+
+def test_hermes_profile_registry_checks_real_existence(
+    hermes_home: Path,  # fixture configures profiles/coder under HERMES_HOME
+) -> None:
+    """HermesProfileRegistry reflects real HERMES_HOME/profiles state via hermes_cli.profiles."""
+    registry = HermesProfileRegistry()
+
+    assert registry.exists("coder") is True  # created by the hermes_home fixture
+    assert registry.exists("default") is True  # the default profile always exists
+    assert registry.exists("nonexistent-profile") is False
+
+
+def test_attractor_run_rejects_unknown_profile_end_to_end(
+    hermes_home: Path,  # fixture sets up isolated env
+) -> None:
+    """handle_attractor_run rejects a pipeline naming a profile absent from the host."""
+    serializer = PydotSerializer()
+    store = GitPipelineStore.from_env(None)
+    _author_linear_pipeline(store, serializer, "ghost_run", profile="ghost-profile")
+
+    payload = json.loads(handle_attractor_run({"spec_id": "ghost_run"}))
+
+    assert payload["ok"] is False
+    assert payload["error"] == "PipelineValidationError"

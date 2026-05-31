@@ -152,6 +152,68 @@ def test_launch_run_creates_run_in_running_state() -> None:
     assert saved_run.status is RunStatus.RUNNING
 
 
+def test_launch_run_rejects_unknown_profile() -> None:
+    """launch_run raises (and creates no run/card) when a worker node names an unknown profile."""
+    pipeline = _make_pipeline()
+    kanban = MagicMock()
+    run_state = MagicMock()
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+    serializer = MagicMock()
+    serializer.parse.return_value = pipeline
+    store = MagicMock()
+    store.load.return_value = "digraph spec-a {}"
+    profile_registry = MagicMock()
+    profile_registry.exists.return_value = False  # no profile exists on the host
+
+    with pytest.raises(PipelineValidationError) as exc_info:
+        _ = launch_run(
+            spec_id="spec-a",
+            initial_context={},
+            kanban=kanban,
+            run_state=run_state,
+            serializer=serializer,
+            store=store,
+            clock=clock,
+            profile_registry=profile_registry,
+        )
+
+    assert any("does not exist" in issue.reason for issue in exc_info.value.issues)
+    run_state.create_run.assert_not_called()
+    kanban.create_card.assert_not_called()
+
+
+def test_launch_run_accepts_known_profile() -> None:
+    """launch_run proceeds when the ProfileRegistry confirms every named profile exists."""
+    pipeline = _make_pipeline()
+    kanban = MagicMock()
+    kanban.create_card.return_value = "task-001"
+    run_state = MagicMock()
+    clock = MagicMock()
+    clock.now.return_value = _NOW
+    serializer = MagicMock()
+    serializer.parse.return_value = pipeline
+    store = MagicMock()
+    store.load.return_value = "digraph spec-a {}"
+    profile_registry = MagicMock()
+    profile_registry.exists.return_value = True
+
+    result = launch_run(
+        spec_id="spec-a",
+        initial_context={},
+        kanban=kanban,
+        run_state=run_state,
+        serializer=serializer,
+        store=store,
+        clock=clock,
+        profile_registry=profile_registry,
+    )
+
+    assert result["status"] == RunStatus.RUNNING.value
+    profile_registry.exists.assert_called()
+    run_state.create_run.assert_called_once()
+
+
 def test_launch_run_creates_first_card_with_resolved_profile() -> None:
     """launch_run creates the first card assigned to the resolved node profile."""
     pipeline = _make_pipeline(node_profile="custom-coder")
