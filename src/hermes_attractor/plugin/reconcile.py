@@ -49,9 +49,21 @@ if TYPE_CHECKING:
     from hermes_attractor.ports.run_state import RunStateStore
     from hermes_attractor.ports.task_event_reader import TaskEventReader
 
-__all__ = ["reconcile_cli_handler", "reconcile_hook", "reconcile_setup", "run_reconcile"]
+__all__ = [
+    "post_tool_call_hook",
+    "reconcile_cli_handler",
+    "reconcile_hook",
+    "reconcile_setup",
+    "run_reconcile",
+]
 
 _log = logging.getLogger(__name__)
+
+#: The kanban tool whose completion drives inline run advancement (research §Run advancement,
+#: primary path). Other terminal kinds (blocked / crashed / timed_out / gave_up) are never
+#: observed by ``post_tool_call`` (a living worker only emits ``kanban_complete``) and are
+#: handled by the reconcile recovery path instead.
+_ADVANCE_ON_TOOL = "kanban_complete"
 
 
 def _make_run_state_store() -> SqliteRunStateStore:
@@ -150,6 +162,31 @@ def reconcile_hook(**_kwargs: object) -> None:
         run_reconcile(tool_client=_runtime_tool_client(), event_reader=_runtime_event_reader())
     except Exception:  # noqa: BLE001  # hook must never break session startup
         _log.exception("attractor reconcile hook failed")
+
+
+def post_tool_call_hook(*, tool_name: str = "", **_kwargs: object) -> None:
+    """``post_tool_call`` hook: advance runs inline right after a worker completes a card.
+
+    This is the primary (low-latency) advancement path: when a dispatcher-spawned worker
+    calls ``kanban_complete``, Hermes fires ``post_tool_call`` synchronously *after* the
+    tool committed its ``completed`` event (verified against ``model_tools.py``), so a
+    reconcile pass here sees the new event and creates the follow-up card before the worker
+    exits. It is gated to ``kanban_complete`` so it is a no-op after every other tool call.
+
+    Advancement reuses the idempotent :func:`run_reconcile`, so it is safe alongside the
+    ``on_session_start`` / ``attractor-reconcile`` recovery path (cursor-based, no double
+    advance). Never raises — a failure must not break the worker's tool cycle.
+
+    Args:
+        tool_name: The name of the tool that was just dispatched.
+        **_kwargs: Other runtime kwargs (``args``, ``result``, ``task_id``, …); ignored.
+    """
+    if tool_name != _ADVANCE_ON_TOOL:
+        return
+    try:
+        run_reconcile(tool_client=_runtime_tool_client(), event_reader=_runtime_event_reader())
+    except Exception:  # noqa: BLE001  # hook must never break the worker's tool cycle
+        _log.exception("attractor post_tool_call advance failed")
 
 
 def reconcile_setup(_subparser: object) -> None:

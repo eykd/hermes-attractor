@@ -14,7 +14,12 @@ import pytest
 
 from hermes_attractor.domain.pipeline import Context
 from hermes_attractor.domain.run import NodeRunStatus, Run, RunNode, RunStatus
-from hermes_attractor.plugin.reconcile import reconcile_hook, reconcile_setup, run_reconcile
+from hermes_attractor.plugin.reconcile import (
+    post_tool_call_hook,
+    reconcile_hook,
+    reconcile_setup,
+    run_reconcile,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -137,3 +142,18 @@ def test_reconcile_hook_swallows_runtime_errors(monkeypatch: pytest.MonkeyPatch)
 def test_reconcile_setup_is_a_noop() -> None:
     """reconcile_setup accepts the CLI subparser and does nothing (the command takes no args)."""
     assert reconcile_setup(object()) is None
+
+
+def test_post_tool_call_hook_ignores_non_completion_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """post_tool_call is a no-op after any tool other than kanban_complete (builds no client)."""
+    # If the gate failed to short-circuit, this raising builder would blow up.
+    monkeypatch.setattr("hermes_attractor.plugin.reconcile._runtime_tool_client", _raise_runtime_error)
+
+    assert post_tool_call_hook(tool_name="kanban_create", args={}, result="{}") is None
+
+
+def test_post_tool_call_hook_swallows_runtime_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On a kanban_complete, post_tool_call advances but never propagates a failure."""
+    monkeypatch.setattr("hermes_attractor.plugin.reconcile._runtime_tool_client", _raise_runtime_error)
+
+    assert post_tool_call_hook(tool_name="kanban_complete", task_id="t-1") is None

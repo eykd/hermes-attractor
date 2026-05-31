@@ -238,14 +238,14 @@ def test_reconcile_to_completion_reaches_succeeded(
     assert run.status is RunStatus.SUCCEEDED
 
 
-@pytest.mark.parametrize("entrypoint", ["hook", "cli"])
+@pytest.mark.parametrize("entrypoint", ["hook", "cli", "post_tool_call"])
 def test_reconcile_entrypoint_advances_run(
     hermes_home: Path,  # fixture sets up isolated env
     kanban: HermesKanbanBoard,
     tool_client: RuntimeToolClient,
     entrypoint: str,
 ) -> None:
-    """The on_session_start hook and the attractor-reconcile CLI both advance a run.
+    """The on_session_start hook, the attractor-reconcile CLI, and post_tool_call all advance a run.
 
     These exercise the real runtime entry points (which build their own clients from env
     via ``_runtime_tool_client`` / ``_runtime_event_reader``), not just ``run_reconcile``.
@@ -274,8 +274,16 @@ def test_reconcile_entrypoint_advances_run(
 
     if entrypoint == "hook":
         reconcile.reconcile_hook(task_id="ignored", session_id="ignored")  # accepts/ignores runtime kwargs
-    else:
+    elif entrypoint == "cli":
         reconcile.reconcile_cli_handler(None)
+    else:
+        # Simulate Hermes firing post_tool_call right after the worker's kanban_complete.
+        reconcile.post_tool_call_hook(
+            tool_name="kanban_complete",
+            args={"task_id": node_a.task_id},
+            result="{}",
+            task_id=node_a.task_id,
+        )
 
     node_b = _latest_node(run_state, run_id, "node_b")
     assert node_b is not None

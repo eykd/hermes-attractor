@@ -55,8 +55,8 @@ def register(ctx: PluginContext) -> None:
     """Register all attractor plugin tools, hooks, and CLI commands with the Hermes host.
 
     Registers 13 tools (health, echo, and the 11 attractor authoring/execution tools),
-    the ``on_session_start`` reconcile hook, and the ``attractor-reconcile`` CLI command
-    (zym.29 Part B).
+    the ``post_tool_call`` (live advance) and ``on_session_start`` (recovery) reconcile
+    hooks, and the ``attractor-reconcile`` CLI command (zym.29 Part B).
     """
     # -- Utility tools -------------------------------------------------------
     ctx.register_tool(
@@ -142,7 +142,10 @@ def register(ctx: PluginContext) -> None:
         _runtime(tools.handle_attractor_result),
     )
 
-    # -- Part B: reconcile hook + CLI command --------------------------------
+    # -- Part B: reconcile hooks + CLI command -------------------------------
+    # Primary (low-latency) advancement: advance inline when a worker completes its card.
+    ctx.register_hook("post_tool_call", reconcile.post_tool_call_hook)
+    # Recovery advancement: replay missed completions on session start.
     ctx.register_hook("on_session_start", reconcile.reconcile_hook)
     ctx.register_cli_command(
         "attractor-reconcile",

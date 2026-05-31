@@ -138,12 +138,13 @@ def test_handler_tolerates_runtime_kwargs() -> None:
     assert result["ok"] is True
 
 
-def test_register_registers_on_session_start_reconcile_hook() -> None:
-    """Part B registers the reconcile callback under the on_session_start hook."""
+def test_register_registers_reconcile_hooks() -> None:
+    """Part B registers the live-advance (post_tool_call) and recovery (on_session_start) hooks."""
     ctx = _FakeContext()
     register(ctx)
 
-    assert set(ctx.hooks) == {"on_session_start"}
+    assert set(ctx.hooks) == {"post_tool_call", "on_session_start"}
+    assert callable(ctx.hooks["post_tool_call"])
     assert callable(ctx.hooks["on_session_start"])
 
 
