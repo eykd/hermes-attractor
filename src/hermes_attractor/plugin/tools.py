@@ -7,6 +7,7 @@ this module is the composition root that wires in concrete adapters.
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 from pathlib import Path
@@ -14,9 +15,12 @@ from typing import TYPE_CHECKING, cast
 
 from hermes_attractor import __version__
 from hermes_attractor.adapters.dot_serializer import PydotSerializer
+from hermes_attractor.adapters.kanban_board import HermesKanbanBoard
 from hermes_attractor.adapters.pipeline_store import GitPipelineStore
+from hermes_attractor.adapters.profile_registry import HermesProfileRegistry
 from hermes_attractor.adapters.renderer import TextRenderer
 from hermes_attractor.adapters.run_state_store import SqliteRunStateStore
+from hermes_attractor.adapters.runtime_tool_client import RuntimeToolClient
 from hermes_attractor.adapters.system_clock import SystemClock
 from hermes_attractor.domain.pipeline import NodeShape, StyleRule
 from hermes_attractor.use_cases.authoring import (
@@ -40,6 +44,7 @@ if TYPE_CHECKING:
     from hermes_attractor.ports.dot import DotSerializer
     from hermes_attractor.ports.kanban import KanbanBoard
     from hermes_attractor.ports.pipeline_store import PipelineStore
+    from hermes_attractor.ports.profile_registry import ProfileRegistry
     from hermes_attractor.ports.run_state import RunStateStore
 
 
@@ -65,6 +70,22 @@ def _make_run_state_store() -> SqliteRunStateStore:
     env_db = os.environ.get("ATTRACTOR_DB_PATH")
     db_path = Path(env_db) if env_db else Path.cwd() / "attractor_runs.db"
     return SqliteRunStateStore(db_path=db_path)
+
+
+def _runtime_kanban() -> KanbanBoard:
+    """Build a KanbanBoard over the live Hermes tool registry dispatch.
+
+    Used by ``handle_attractor_run`` when no kanban override is injected: the runtime
+    tool registry (provided by the host, and by the ``test`` dependency group for the
+    integration suite) is imported by name via ``importlib`` and wrapped in a
+    :class:`RuntimeToolClient`. See research §Phase 1 (A).
+
+    Returns:
+        A HermesKanbanBoard bound to the live runtime dispatch seam.
+    """
+    registry = importlib.import_module("tools.registry").registry
+    dispatch = cast("Callable[..., str]", registry.dispatch)
+    return HermesKanbanBoard(tool_client=RuntimeToolClient(dispatch=dispatch))
 
 
 def _make_store(args: dict[str, object]) -> GitPipelineStore:
@@ -316,6 +337,7 @@ def handle_attractor_run(  # noqa: PLR0913
     serializer: DotSerializer | None = None,
     store: PipelineStore | None = None,
     clock: Clock | None = None,
+    profile_registry: ProfileRegistry | None = None,
 ) -> str:
     """Handle the ``attractor_run`` tool: launch a new pipeline run.
 
@@ -328,6 +350,8 @@ def handle_attractor_run(  # noqa: PLR0913
         serializer: Optional DotSerializer override (for testing).
         store: Optional PipelineStore override (for testing).
         clock: Optional Clock override (for testing).
+        profile_registry: Optional ProfileRegistry override (for testing); defaults to the
+            host-backed :class:`HermesProfileRegistry` so unknown profiles are rejected.
     """
 
     def _produce() -> dict[str, object]:
@@ -345,11 +369,9 @@ def handle_attractor_run(  # noqa: PLR0913
 
         _run_state = run_state if run_state is not None else _make_run_state_store()
 
-        if kanban is not None:
-            _kanban = kanban
-        else:
-            msg = "kanban tool client not configured"
-            raise RuntimeError(msg)
+        _kanban = kanban if kanban is not None else _runtime_kanban()
+
+        _profile_registry = profile_registry if profile_registry is not None else HermesProfileRegistry()
 
         return launch_run(
             spec_id=spec_id,
@@ -359,6 +381,7 @@ def handle_attractor_run(  # noqa: PLR0913
             serializer=_serializer,
             store=_store,
             clock=_clock,
+            profile_registry=_profile_registry,
         )
 
     return _safe(_produce)

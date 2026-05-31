@@ -100,15 +100,39 @@ br sync --flush-only     # flush state to .beads/ (git-friendly JSONL)
 
 The `.beads/` directory is git-tracked.
 
-## Open items (Hermes runtime integration)
+## Hermes runtime integration (verified against `hermes-agent==0.15.2`)
 
-The `hermes` CLI is **not yet installed**, so live plugin loading is unverified:
-- The entry-point group has been reconciled to `hermes_agent.plugins` (was `hermes.plugins`)
-  based on research findings (R-EP). The `plugin.yaml` manifest schema is still an assumption
-  — reconcile with Hermes docs/source once available.
-- `src/hermes_attractor/ports/hermes.py::PluginContext` encodes our assumed registration
-  API. Revisit when the real Hermes context is available.
-- Local dev discovery uses the `.hermes/plugins/attractor` symlink (no entry point needed).
+`hermes-agent` is a **test dependency** (the `test` dependency-group, pinned `>=0.15.2`;
+latest == 0.15.2). It is **not** a runtime dependency — the plugin's runtime gets
+`hermes_cli` / `tools` from the host; the test group only installs it so the live
+integration suite runs as part of the normal gate (`just test`, hermetic temp `HERMES_HOME`,
+no model key). `just test-hermes` runs just the integration subset.
+
+- `register(ctx)` on the real `hermes_cli.plugins.PluginContext` registers all 13 tools, two
+  reconcile hooks — `post_tool_call` (primary, low-latency: advance inline when a worker
+  completes a card) and `on_session_start` (recovery: replay missed completions) — and the
+  `attractor-reconcile` CLI command. The `ports/hermes.py::PluginContext` signatures mirror 0.15.2.
+- Both advancement paths reuse the idempotent `run_reconcile` (cursor-based, no double advance),
+  driven via the verified `tools.registry.registry.dispatch(name, args)` seam
+  (`adapters/runtime_tool_client.py`) and the kanban `task_events` log read directly from the
+  DB (`adapters/task_event_reader.py`); see `specs/001-attractor-kanban/research-hermes-kanban.md`
+  §Phase 1 for the verified tool names/params/schema. `post_tool_call` is gated to
+  `kanban_complete`; other terminal kinds (blocked/crashed/timed_out/gave_up) are handled by the
+  recovery path.
+- Run-launch rejects pipelines naming a profile absent from the host (FR-004 / unknown-profile
+  edge case): `launch_run` takes a `ProfileRegistry`; `adapters/profile_registry.py::HermesProfileRegistry`
+  wraps `hermes_cli.profiles.profile_exists` (`default` always exists; others ⇒
+  `HERMES_HOME/profiles/<name>/`).
+- All `hermes_cli` / `tools.registry` imports are **lazy** (inside functions, via `importlib`),
+  so production modules import cleanly without the package as a runtime dep and pyright (run in
+  the locked env) does not statically resolve them. The runtime entry points (`post_tool_call_hook`,
+  `reconcile_hook`, `attractor-reconcile` handler, `_runtime_*` builders, `HermesProfileRegistry`)
+  are covered end-to-end by the integration suite — no `# pragma: no cover` on hermes seams.
+
+Still **unverified** (no live `hermes` CLI session here): end-to-end entry-point *discovery*
+(the live suite constructs `PluginContext`/`PluginManager` directly) and the `plugin.yaml`
+manifest schema. The entry-point group is `hermes_agent.plugins`; local dev discovery uses the
+`.hermes/plugins/attractor` symlink.
 
 ## Meta-conventions
 

@@ -143,6 +143,9 @@ def test_per_node_profile_override_takes_precedence() -> None:  # noqa: PLR0915
     clock = MagicMock()
     clock.now.return_value = _NOW
 
+    profile_registry = MagicMock()
+    profile_registry.exists.return_value = True
+
     # Launch the run.
     run_result = _ok(
         handle_attractor_run(
@@ -152,6 +155,7 @@ def test_per_node_profile_override_takes_precedence() -> None:  # noqa: PLR0915
             serializer=serializer,
             store=store,
             clock=clock,
+            profile_registry=profile_registry,
         )
     )
     run_id = str(run_result["run_id"])

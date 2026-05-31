@@ -1,7 +1,8 @@
-"""HermesEventLog adapter: reads terminal events from the Hermes task_events log.
+"""HermesEventLog adapter: maps terminal ``task_events`` rows to domain CardResults.
 
-Batches reads in groups of ``EVENT_LOG_BATCH_SIZE`` (from domain constants) to bound
-memory and replay duration (plan.md §Performance §Batch-boundary correctness).
+Reads terminal completion events from a :class:`TaskEventReader` (which tails the durable
+kanban ``task_events`` log) in batches of ``EVENT_LOG_BATCH_SIZE`` to bound memory and
+replay duration (plan.md §Performance §Batch-boundary correctness).
 
 Note on batch size: ``EVENT_LOG_BATCH_SIZE`` is a **throughput knob only**. The
 reconciler's correctness does not depend on it — every event at or below the final
@@ -9,6 +10,10 @@ cursor is guaranteed to be processed regardless of how many batches it takes.
 Fan-in aggregation state is stored as durable ``RunNode`` records (not derived by
 re-reading events), so partial batches never leave the state machine in an
 inconsistent position.
+
+Verified against hermes-agent 0.15.2: there is no event-read *tool*; events are read from
+the kanban DB via the :class:`TaskEventReader` port. See
+``specs/001-attractor-kanban/research-hermes-kanban.md`` §Phase 1 (C).
 
 See: specs/001-attractor-kanban/contracts/ports.md §EventLog
 """
@@ -24,7 +29,7 @@ from hermes_attractor.domain.constants import EVENT_LOG_BATCH_SIZE
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from hermes_attractor.ports.hermes_tool_client import HermesToolClient
+    from hermes_attractor.ports.task_event_reader import TaskEventReader
 
 __all__ = ["HermesEventLog"]
 
@@ -33,11 +38,7 @@ _log = logging.getLogger(__name__)
 #: Terminal event kinds; all other kinds are filtered out (contracts/ports.md §EventLog).
 _TERMINAL_KINDS: frozenset[str] = frozenset({"completed", "blocked", "gave_up", "crashed", "timed_out"})
 
-#: Hermes tool name for reading task events.
-_TOOL_READ_TASK_EVENTS = "read_task_events"
-
-#: Response field names (R2 risk containment).
-_FIELD_EVENTS = "events"
+#: Event-row field name constants (R2 risk containment).
 _FIELD_TASK_ID = "task_id"
 _FIELD_EVENT_ID = "event_id"
 _FIELD_KIND = "kind"
@@ -46,23 +47,24 @@ _FIELD_METADATA = "metadata"
 
 
 class HermesEventLog:
-    """EventLog adapter backed by the Hermes ``read_task_events`` tool.
+    """EventLog adapter backed by a :class:`TaskEventReader`.
 
-    Reads terminal completion events in batches of ``EVENT_LOG_BATCH_SIZE``
-    events per call. Non-terminal events are filtered out client-side.
+    Reads terminal completion events in batches of ``EVENT_LOG_BATCH_SIZE`` events
+    per call and maps each raw row to a :class:`CardResult`. Non-terminal events and
+    events at or below the cursor are filtered out defensively.
 
     Attributes:
-        _client: The Hermes tool client.
+        _reader: The task-event reader.
     """
 
-    def __init__(self, tool_client: HermesToolClient) -> None:
-        """Initialise with a Hermes tool client.
+    def __init__(self, reader: TaskEventReader) -> None:
+        """Initialise with a task-event reader.
 
         Args:
-            tool_client: An object with a ``call(tool_name, **kwargs)`` method.
+            reader: An object with a ``read_terminal_events(*, after_event_id, limit)`` method.
         """
         super().__init__()
-        self._client = tool_client
+        self._reader = reader
 
     def read_since(self, last_seen_event_id: int) -> Sequence[CardResult]:
         """Return terminal completion events with event_id > last_seen_event_id.
@@ -77,20 +79,10 @@ class HermesEventLog:
         Returns:
             A sequence of CardResult objects for terminal events, ordered by event_id.
         """
-        response = self._client.call(
-            _TOOL_READ_TASK_EVENTS,
-            after_event_id=last_seen_event_id,
-            limit=EVENT_LOG_BATCH_SIZE,
-        )
-        raw: dict[str, object] = cast("dict[str, object]", response) if isinstance(response, dict) else {}
-        raw_events = raw.get(_FIELD_EVENTS, [])
-        if isinstance(raw_events, list):
-            events_list: list[dict[str, object]] = cast("list[dict[str, object]]", raw_events)
-        else:
-            events_list = []
+        rows = self._reader.read_terminal_events(after_event_id=last_seen_event_id, limit=EVENT_LOG_BATCH_SIZE)
 
         results: list[CardResult] = []
-        for event in events_list:
+        for event in rows:
             kind = str(event.get(_FIELD_KIND, ""))
             if kind not in _TERMINAL_KINDS:
                 continue

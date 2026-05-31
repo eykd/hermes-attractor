@@ -1,11 +1,13 @@
 # Hermes plugin manifest for `attractor`.
 #
-# Tool registration API (register_tool, schema format with "parameters" key,
-# positional toolset arg, handler kwargs tolerance) is VERIFIED against
-# hermes-agent 0.15.2.  Hook and CLI-command registration are deferred to Part B.
+# Tool, hook, and CLI-command registration APIs (register_tool with "parameters"
+# schema + positional toolset arg + handler kwargs tolerance; register_hook;
+# register_cli_command) are VERIFIED against hermes-agent 0.15.2 via the integration
+# suite that calls register() on a real PluginContext.
 #
-# Discovery for local dev uses the `.hermes/plugins/attractor` symlink; the
-# pip entry point (`hermes_agent.plugins` group) is the distribution path.
+# NOTE: this manifest's schema/fields are NOT yet validated against Hermes's actual
+# plugin loader — discovery (pip entry point `hermes_agent.plugins`, or the
+# `.hermes/plugins/attractor` symlink for local dev) has not been run in a live session.
 name: attractor
 version: 0.1.0
 description: >

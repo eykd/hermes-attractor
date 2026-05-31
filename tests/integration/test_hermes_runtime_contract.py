@@ -73,3 +73,19 @@ def test_register_wires_all_tools_in_real_context() -> None:
     # which tools were plugin-registered (no public accessor in 0.15.2).
     registered: set[str] = manager._plugin_tool_names  # noqa: SLF001
     assert registered == _EXPECTED_TOOL_NAMES
+
+
+def test_register_wires_reconcile_hook_and_cli_in_real_context() -> None:
+    """register() registers the on_session_start hook + attractor-reconcile CLI command."""
+    ctx, manager = _make_context()
+    register(ctx)
+
+    # PluginManager stores hooks per name and CLI commands by name (0.15.2 internals).
+    assert "on_session_start" in manager._hooks  # noqa: SLF001
+    assert any(getattr(cb, "__name__", "") == "reconcile_hook" for cb in manager._hooks["on_session_start"])  # noqa: SLF001
+    assert "post_tool_call" in manager._hooks  # noqa: SLF001
+    assert any(getattr(cb, "__name__", "") == "post_tool_call_hook" for cb in manager._hooks["post_tool_call"])  # noqa: SLF001
+    assert "attractor-reconcile" in manager._cli_commands  # noqa: SLF001
+    command = manager._cli_commands["attractor-reconcile"]  # noqa: SLF001
+    assert callable(command["setup_fn"])
+    assert callable(command["handler_fn"])

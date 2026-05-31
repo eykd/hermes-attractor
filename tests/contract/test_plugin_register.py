@@ -138,17 +138,25 @@ def test_handler_tolerates_runtime_kwargs() -> None:
     assert result["ok"] is True
 
 
-def test_register_registers_no_hooks_in_part_a() -> None:
-    """Part A does not register any hooks (deferred to Part B)."""
+def test_register_registers_reconcile_hooks() -> None:
+    """Part B registers the live-advance (post_tool_call) and recovery (on_session_start) hooks."""
     ctx = _FakeContext()
     register(ctx)
 
-    assert ctx.hooks == {}
+    assert set(ctx.hooks) == {"post_tool_call", "on_session_start"}
+    assert callable(ctx.hooks["post_tool_call"])
+    assert callable(ctx.hooks["on_session_start"])
 
 
-def test_register_registers_no_cli_commands_in_part_a() -> None:
-    """Part A does not register any CLI commands (deferred to Part B)."""
+def test_register_registers_attractor_reconcile_cli_command() -> None:
+    """Part B registers the attractor-reconcile CLI command with setup and handler fns."""
     ctx = _FakeContext()
     register(ctx)
 
-    assert ctx.cli_commands == {}
+    assert set(ctx.cli_commands) == {"attractor-reconcile"}
+    command = ctx.cli_commands["attractor-reconcile"]
+    assert command["name"] == "attractor-reconcile"
+    assert callable(command["setup_fn"])
+    assert callable(command["handler_fn"])
+    assert isinstance(command["help"], str)
+    assert command["help"]

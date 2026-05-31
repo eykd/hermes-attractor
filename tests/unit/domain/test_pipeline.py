@@ -681,3 +681,49 @@ def test_pipeline_validate_accepts_valid_condition() -> None:
     pipeline = _make_pipeline_with_condition('status == "done"')
     issues = pipeline.validate()
     assert issues == [], f"Expected no issues for a valid edge condition, got: {issues}"
+
+
+# ---------------------------------------------------------------------------
+# resolved_worker_profiles (run-launch profile-existence support)
+# ---------------------------------------------------------------------------
+
+
+def test_resolved_worker_profiles_maps_worker_nodes_to_resolved_profiles() -> None:
+    """resolved_worker_profiles returns {node_id: profile} for worker nodes, skipping START/EXIT."""
+    start = Node(node_id="start", shape=NodeShape.START)
+    work = Node(node_id="work", shape=NodeShape.CODERGEN, profile="coder")
+    review = Node(node_id="review", shape=NodeShape.CODERGEN)  # resolved via stylesheet
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    pipeline = Pipeline(
+        spec_id="p",
+        nodes=[start, work, review, exit_],
+        edges=[
+            Edge(source_id="start", target_id="work"),
+            Edge(source_id="work", target_id="review"),
+            Edge(source_id="review", target_id="exit"),
+        ],
+        stylesheet=Stylesheet(rules=[StyleRule(selector="*", profile="reviewer")]),
+    )
+
+    resolved = pipeline.resolved_worker_profiles()
+
+    # Per-node override wins for 'work'; stylesheet default applies to 'review'.
+    assert resolved == {"work": "coder", "review": "reviewer"}
+    # START/EXIT are not worker shapes and must not appear.
+    assert "start" not in resolved
+    assert "exit" not in resolved
+
+
+def test_resolved_worker_profiles_omits_worker_nodes_without_a_profile() -> None:
+    """A worker node with no per-node profile and no matching stylesheet rule is omitted."""
+    start = Node(node_id="start", shape=NodeShape.START)
+    work = Node(node_id="work", shape=NodeShape.CODERGEN)  # no profile, no stylesheet match
+    exit_ = Node(node_id="exit", shape=NodeShape.EXIT)
+    pipeline = Pipeline(
+        spec_id="p",
+        nodes=[start, work, exit_],
+        edges=[Edge(source_id="start", target_id="work"), Edge(source_id="work", target_id="exit")],
+        stylesheet=Stylesheet(rules=[]),
+    )
+
+    assert pipeline.resolved_worker_profiles() == {}

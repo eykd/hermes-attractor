@@ -126,3 +126,74 @@ for human review.
   version (names drift; e.g. `gave_up` rename).
 - Whether `register_auxiliary_task` or profile cron is the better reconcile trigger.
 - Entry-point group is `hermes_agent.plugins` (not the repo's current `hermes.plugins`).
+
+---
+
+## Phase 1 live-API verification (zym.31) — verified against installed `hermes-agent==0.15.2`
+
+**Status**: Grounded by empirical dispatch + DB inspection against the installed package
+(`uv run --with hermes-agent==0.15.2`), 2026-05-30. Resolves the three A/B/C unknowns that
+gated Part B. Durable proof lives in `tests/integration/test_reconcile_runtime.py`.
+
+### (A) Registry / dispatch access — RESOLVED
+
+- The tool registry is a module-global singleton in a **separate top-level package** `tools`
+  (sibling to `hermes_cli`), **not** `hermes_cli.tools.registry`:
+  `from tools.registry import registry`.
+- Dispatch signature: `registry.dispatch(name: str, args: dict, **kwargs) -> str`. It returns a
+  **JSON string** (the handler's return value, or `{"error": ...}` on unknown tool / exception).
+- `registry.dispatch` does **not** consult a tool's `check_fn` — direct dispatch of kanban tools
+  works in an orchestrator/CLI context (no `HERMES_KANBAN_TASK`) even though `registry.list_tools()`
+  hides them from the model schema there.
+- A hook callback obtains the registry by **module-global import**, not via kwargs: hooks are
+  invoked as `cb(**kwargs)` (`PluginManager.invoke_hook`), and `on_session_start ∈ VALID_HOOKS`.
+  CLI handlers are invoked as `handler_fn(args)` (argparse `set_defaults(func=...)`).
+  ⇒ `plugin/__init__.py::_runtime` dropping runtime kwargs is irrelevant to dispatch; the seam is
+  the import, wrapped by `RuntimeToolClient(dispatch=registry.dispatch)`.
+- `PluginContext.register_hook(hook_name, callback)` and
+  `register_cli_command(name, help, setup_fn, handler_fn=None, description="")` match `ports/hermes.py`.
+
+### (B) Kanban tool names + params — DRIFT CONFIRMED, fixed in `adapters/kanban_board.py`
+
+LLM-facing names are `kanban_create` / `kanban_complete` / `kanban_block` (not `create_task` / …).
+
+- `kanban_create` **requires `title` and `assignee`**; deps are `parents` (not `parent_task_ids`);
+  `idempotency_key` dedupes (returns the existing `task_id`); there is **no `retry_limit` / `kind`**
+  param. Returns `{"ok": true, "task_id": "t_…", "status": "ready"}`. Our `Card` has no title, so the
+  adapter synthesizes one (first body line, capped; fallback to the idempotency key).
+- `kanban_complete`: `task_id`, `summary`, `metadata` (+ `result`, `created_cards`, `artifacts`).
+  In orchestrator/CLI context (`HERMES_KANBAN_TASK` unset) `_enforce_worker_task_ownership` is a no-op
+  and `expected_run_id=None`, so it completes a freshly-created `running|ready` task directly — this is
+  how the integration test simulates a worker completion (no LLM, no key).
+- `kanban_block`: `task_id`, `reason` only (no `body`); the adapter folds `body` into `reason`.
+
+### (C) Event-log read — NO TOOL; read `task_events ⋈ task_runs` directly
+
+- There is **no event-read tool** (only `kanban_show`/`kanban_list`). `read_task_events` does not exist.
+- `task_events(id PK AUTOINCREMENT, task_id, run_id, kind, payload, created_at)`. The completion **event
+  payload only carries a truncated first-line `summary` + `result_len`** — it does **not** contain the
+  worker's structured `metadata` (gate verdict / `context_updates`). Those live on the **`task_runs`** row
+  (`summary`, `metadata` JSON), linked by `task_events.run_id = task_runs.id` (a synthesized zero-duration
+  run is created if the task was never claimed).
+- The reconcile EventLog therefore reads via this query (terminal-filtered, cursor-bounded, ordered, capped):
+  ```sql
+  SELECT e.id AS event_id, e.task_id, e.kind, r.summary, r.metadata
+  FROM task_events e LEFT JOIN task_runs r ON e.run_id = r.id
+  WHERE e.id > ? AND e.kind IN ('completed','blocked','gave_up','crashed','timed_out')
+  ORDER BY e.id ASC LIMIT ?
+  ```
+  Implemented as `adapters/task_event_reader.py::SqliteTaskEventReader` behind an injectable
+  connection factory; `adapters/event_log.py::HermesEventLog` now depends on the `TaskEventReader`
+  port instead of `HermesToolClient`.
+
+### Isolated-home init for tests
+
+`hermes_cli.kanban_db.connect(db_path=…)` (or `board`/env) **auto-creates the schema on first connect** —
+no `hermes setup` and no model key needed. Tests set `HERMES_HOME` + `HERMES_KANBAN_DB` into `tmp_path`;
+the first `kanban_create` dispatch creates `kanban.db`.
+
+### Residual note (out of scope for zym.31)
+
+`block_card` writes a terminal `blocked` event that a later reconcile will read; the HUMAN-pause /
+blocked-event interaction is governed by the existing use-case tests and the deferred `post_tool_call`
+hook, and is unchanged here. The zym.31 proof covers the linear `A→B` completion→advance path.
