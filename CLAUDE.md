@@ -129,10 +129,22 @@ no model key). `just test-hermes` runs just the integration subset.
   `reconcile_hook`, `attractor-reconcile` handler, `_runtime_*` builders, `HermesProfileRegistry`)
   are covered end-to-end by the integration suite — no `# pragma: no cover` on hermes seams.
 
-Still **unverified** (no live `hermes` CLI session here): end-to-end entry-point *discovery*
-(the live suite constructs `PluginContext`/`PluginManager` directly) and the `plugin.yaml`
-manifest schema. The entry-point group is `hermes_agent.plugins`; local dev discovery uses the
-`.hermes/plugins/attractor` symlink.
+**Install path = pip entry point.** Hermes's loader does `ep.load()` then
+`getattr(module, "register")`, so the `hermes_agent.plugins` entry point references the **module**
+(`hermes_attractor.plugin`, not `:register`) — a contract test (`tests/contract/test_entry_point.py`)
+guards this. Install by `pip install`-ing the package into the hermes env (e.g. one Dockerfile
+line); pip resolves `pydot` and hatch-vcs generates `_version.py` at build time.
+
+The git-based `hermes plugins install <repo>` path is **not supported** for this plugin: it clones
+the repo, expects `plugin.yaml` + a `register`-exposing `__init__.py` at the **repo root** (ours are
+under `src/hermes_attractor/plugin/`), and **installs no dependencies** — so the real `pydot` dep
+(and the gitignored, build-generated `_version.py`) would fail at load. Supporting it would need a
+root shim + `_version` guard + lazy `pydot`, and *still* require `pydot` server-side — at which point
+the pip path is strictly simpler.
+
+Still **unverified** (no live `hermes` session here): end-to-end *discovery + register* inside a
+running gateway (the suite verifies the entry point resolves + `register(ctx)` on a real
+`PluginContext`, but not the two composed in a live load).
 
 ## Meta-conventions
 
