@@ -112,6 +112,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+# The repo root carries a plugin-install shim `__init__.py` (for `hermes plugins install`),
+# which makes ruff infer the hyphenated repo dir (`hermes-attractor`) as a package and flag
+# every package `__init__.py` with N999 (invalid module name). Silence that false positive.
+"__init__.py" = ["N999"]
 "tests/**/*.py" = [
     "S101",    # Allow assert in tests
     "ARG",     # Allow unused arguments in tests (fixtures)

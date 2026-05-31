@@ -10,12 +10,17 @@ from __future__ import annotations
 
 import base64
 import json
-
-import pydot
+from typing import TYPE_CHECKING
 
 from hermes_attractor.domain.constants import DOT_MAX_EDGES, DOT_MAX_INPUT_BYTES, DOT_MAX_NODES
 from hermes_attractor.domain.exceptions import PipelineValidationError, ValidationIssue
 from hermes_attractor.domain.pipeline import Edge, GoalGatePolicy, Node, NodeShape, Pipeline, StyleRule, Stylesheet
+
+if TYPE_CHECKING:
+    # ``pydot`` is imported lazily inside the methods that use it so the module imports
+    # cleanly without pydot present (the ``hermes plugins install`` path installs no deps);
+    # the graph tools fail gracefully — and only when actually invoked — if pydot is absent.
+    import pydot
 
 #: Mapping from Graphviz DOT shape attribute to NodeShape enum value.
 _DOT_SHAPE_TO_NODE_SHAPE: dict[str, NodeShape] = {shape.value: shape for shape in NodeShape}
@@ -68,6 +73,8 @@ class PydotSerializer:
         Raises:
             PipelineValidationError: If input exceeds resource limits or is malformed.
         """
+        import pydot  # noqa: PLC0415  # lazy: keep module import pydot-free (see TYPE_CHECKING note)
+
         raw_bytes = dot.encode("utf-8")
         if len(raw_bytes) > DOT_MAX_INPUT_BYTES:
             msg = f"DOT input size {len(raw_bytes)} bytes exceeds limit of {DOT_MAX_INPUT_BYTES}"
@@ -253,6 +260,8 @@ class PydotSerializer:
         Returns:
             A pydot Node with DOT attributes set.
         """
+        import pydot  # noqa: PLC0415  # lazy: keep module import pydot-free (see TYPE_CHECKING note)
+
         attrs: dict[str, str] = {"shape": node.shape.dot_shape}
         if node.profile is not None:
             attrs["profile"] = node.profile
@@ -281,6 +290,8 @@ class PydotSerializer:
         Returns:
             A pydot Edge with DOT attributes set.
         """
+        import pydot  # noqa: PLC0415  # lazy: keep module import pydot-free (see TYPE_CHECKING note)
+
         edge_attrs: dict[str, str] = {}
         if edge.condition is not None:
             edge_attrs["condition"] = edge.condition
@@ -299,6 +310,8 @@ class PydotSerializer:
         Returns:
             A valid Graphviz DOT string.
         """
+        import pydot  # noqa: PLC0415  # lazy: keep module import pydot-free (see TYPE_CHECKING note)
+
         graph = pydot.Dot(graph_name=pipeline.spec_id, graph_type="digraph")
         self._emit_stylesheet(graph, pipeline.stylesheet)
         for node in pipeline.nodes:
