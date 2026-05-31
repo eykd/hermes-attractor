@@ -70,12 +70,13 @@ def _make_run_state_store() -> SqliteRunStateStore:
     return SqliteRunStateStore(db_path=db_path)
 
 
-def _runtime_kanban() -> KanbanBoard:  # pragma: no cover - requires the live hermes runtime
+def _runtime_kanban() -> KanbanBoard:
     """Build a KanbanBoard over the live Hermes tool registry dispatch.
 
     Used by ``handle_attractor_run`` when no kanban override is injected: the runtime
-    tool registry (not in the locked deps) is imported by name via ``importlib`` and
-    wrapped in a :class:`RuntimeToolClient`. See research §Phase 1 (A).
+    tool registry (provided by the host, and by the ``test`` dependency group for the
+    integration suite) is imported by name via ``importlib`` and wrapped in a
+    :class:`RuntimeToolClient`. See research §Phase 1 (A).
 
     Returns:
         A HermesKanbanBoard bound to the live runtime dispatch seam.

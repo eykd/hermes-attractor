@@ -102,12 +102,11 @@ The `.beads/` directory is git-tracked.
 
 ## Hermes runtime integration (verified against `hermes-agent==0.15.2`)
 
-The plugin's registration surface and kanban execution substrate are **verified against the
-real package**, exercised by an opt-in, hermetic live suite (kept out of locked deps):
-
-```bash
-just test-hermes   # ≡ uv run --with hermes-agent==0.15.2 pytest tests/integration -v -m integration
-```
+`hermes-agent` is a **test dependency** (the `test` dependency-group, pinned `>=0.15.2`;
+latest == 0.15.2). It is **not** a runtime dependency — the plugin's runtime gets
+`hermes_cli` / `tools` from the host; the test group only installs it so the live
+integration suite runs as part of the normal gate (`just test`, hermetic temp `HERMES_HOME`,
+no model key). `just test-hermes` runs just the integration subset.
 
 - `register(ctx)` on the real `hermes_cli.plugins.PluginContext` registers all 13 tools, the
   `on_session_start` reconcile hook, and the `attractor-reconcile` CLI command. The
@@ -117,8 +116,10 @@ just test-hermes   # ≡ uv run --with hermes-agent==0.15.2 pytest tests/integra
   DB (`adapters/task_event_reader.py`); see `specs/001-attractor-kanban/research-hermes-kanban.md`
   §Phase 1 for the verified tool names/params/schema.
 - All `hermes_cli` / `tools.registry` imports are **lazy** (inside functions, via `importlib`),
-  so production modules import cleanly without the package and the 100% default coverage run
-  excludes only the thin `# pragma: no cover` runtime builders.
+  so production modules import cleanly without the package as a runtime dep and pyright (run in
+  the locked env) does not statically resolve them. The runtime entry points (`reconcile_hook`,
+  `attractor-reconcile` handler, `_runtime_*` builders) are covered end-to-end by the integration
+  suite — no `# pragma: no cover` on hermes seams.
 
 Still **unverified** (no live `hermes` CLI session here): end-to-end entry-point *discovery*
 (the live suite constructs `PluginContext`/`PluginManager` directly) and the `plugin.yaml`

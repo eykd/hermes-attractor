@@ -6,9 +6,9 @@ completing that card via the real ``kanban_complete`` tool (no LLM, no model key
 reconcile loop, and asserts the run advanced and the next card was created — all against a
 real ``~/.hermes`` kanban SQLite DB isolated to ``tmp_path``.
 
-Skipped automatically under the default (hermes-free) ``uv run pytest``; run it with::
-
-    uv run --with hermes-agent==0.15.2 pytest tests/integration -v -m integration
+``hermes-agent`` is in the ``test`` dependency-group, so this runs as part of the default
+``uv run pytest`` (and ``just test-hermes`` for just the integration subset). The
+``pytest.importorskip`` guards remain as a graceful fallback if that group is absent.
 
 Hermetic and repeatable: a fresh temp ``HERMES_HOME`` + kanban DB per run (see
 ``conftest.py``), so re-running yields the same green result.
@@ -17,6 +17,7 @@ Hermetic and repeatable: a fresh temp ``HERMES_HOME`` + kanban DB per run (see
 from __future__ import annotations
 
 import importlib
+import json
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -32,7 +33,9 @@ from hermes_attractor.adapters.run_state_store import SqliteRunStateStore
 from hermes_attractor.adapters.system_clock import SystemClock
 from hermes_attractor.domain.pipeline import NodeShape
 from hermes_attractor.domain.run import NodeRunStatus, RunStatus
+from hermes_attractor.plugin import reconcile
 from hermes_attractor.plugin.reconcile import run_reconcile
+from hermes_attractor.plugin.tools import handle_attractor_run
 from hermes_attractor.use_cases.authoring import add_edge, add_node, create_graph
 from hermes_attractor.use_cases.run_execution import launch_run
 
@@ -233,3 +236,66 @@ def test_reconcile_to_completion_reaches_succeeded(
     run = run_state.get_run(run_id)
     assert run is not None
     assert run.status is RunStatus.SUCCEEDED
+
+
+@pytest.mark.parametrize("entrypoint", ["hook", "cli"])
+def test_reconcile_entrypoint_advances_run(
+    hermes_home: Path,  # fixture sets up isolated env
+    kanban: HermesKanbanBoard,
+    tool_client: RuntimeToolClient,
+    entrypoint: str,
+) -> None:
+    """The on_session_start hook and the attractor-reconcile CLI both advance a run.
+
+    These exercise the real runtime entry points (which build their own clients from env
+    via ``_runtime_tool_client`` / ``_runtime_event_reader``), not just ``run_reconcile``.
+    """
+    serializer = PydotSerializer()
+    store = GitPipelineStore.from_env(None)
+    run_state = SqliteRunStateStore(db_path=Path(os.environ["ATTRACTOR_DB_PATH"]))
+    clock = SystemClock()
+    spec_id = f"reconcile_entry_{entrypoint}"
+    _author_linear_pipeline(store, serializer, spec_id)
+
+    run_id = str(
+        launch_run(
+            spec_id=spec_id,
+            initial_context={},
+            kanban=kanban,
+            run_state=run_state,
+            serializer=serializer,
+            store=store,
+            clock=clock,
+        )["run_id"]
+    )
+    node_a = _latest_node(run_state, run_id, "node_a")
+    assert node_a is not None
+    _complete(tool_client, node_a.task_id, summary="A done", metadata={})
+
+    if entrypoint == "hook":
+        reconcile.reconcile_hook(task_id="ignored", session_id="ignored")  # accepts/ignores runtime kwargs
+    else:
+        reconcile.reconcile_cli_handler(None)
+
+    node_b = _latest_node(run_state, run_id, "node_b")
+    assert node_b is not None
+    assert node_b.status is NodeRunStatus.DISPATCHED
+    assert node_b.task_id
+
+
+def test_attractor_run_builds_runtime_kanban_when_unset(
+    hermes_home: Path,  # fixture sets up isolated env
+) -> None:
+    """handle_attractor_run with no injected kanban builds one from the live registry.
+
+    Covers the ``_runtime_kanban`` seam: with no override the handler launches the run
+    against the real kanban backend and returns ok:true with a run_id.
+    """
+    serializer = PydotSerializer()
+    store = GitPipelineStore.from_env(None)
+    _author_linear_pipeline(store, serializer, "rt_kanban")
+
+    payload = json.loads(handle_attractor_run({"spec_id": "rt_kanban"}))
+
+    assert payload["ok"] is True, payload
+    assert "run_id" in payload["result"]

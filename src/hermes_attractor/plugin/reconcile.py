@@ -112,30 +112,31 @@ def run_reconcile(  # noqa: PLR0913
     )
 
 
-def _runtime_tool_client() -> HermesToolClient:  # pragma: no cover - requires the live hermes runtime
+def _runtime_tool_client() -> HermesToolClient:
     """Build a RuntimeToolClient over the live ``tools.registry`` dispatch.
 
-    ``tools.registry`` is not in the locked deps; it is imported by name via
-    ``importlib`` (the runtime worker process provides it) so static analysis does not
-    need to resolve it.
+    ``tools.registry`` is provided by the host hermes runtime (and by the ``test``
+    dependency group for the integration suite); it is imported by name via ``importlib``
+    so it stays out of the plugin's runtime deps and out of static import resolution.
     """
     registry = importlib.import_module("tools.registry").registry
     dispatch = cast("Callable[..., str]", registry.dispatch)
     return RuntimeToolClient(dispatch=dispatch)
 
 
-def _runtime_event_reader() -> TaskEventReader:  # pragma: no cover - requires the live hermes runtime
+def _runtime_event_reader() -> TaskEventReader:
     """Build a SqliteTaskEventReader over the live kanban DB connection.
 
-    ``hermes_cli.kanban_db`` is not in the locked deps; it is imported by name via
-    ``importlib`` so static analysis does not need to resolve it.
+    ``hermes_cli.kanban_db`` is provided by the host hermes runtime (and by the ``test``
+    dependency group for the integration suite); it is imported by name via ``importlib``
+    so it stays out of the plugin's runtime deps and out of static import resolution.
     """
     kanban_db = importlib.import_module("hermes_cli.kanban_db")
     connect = cast("Callable[..., sqlite3.Connection]", kanban_db.connect)
     return SqliteTaskEventReader(connect=connect)
 
 
-def reconcile_hook(**_kwargs: object) -> None:  # pragma: no cover - requires the live hermes runtime
+def reconcile_hook(**_kwargs: object) -> None:
     """``on_session_start`` hook: reconcile active runs against the kanban event log.
 
     Builds the runtime clients from the live registry / kanban DB and delegates to
@@ -151,7 +152,7 @@ def reconcile_hook(**_kwargs: object) -> None:  # pragma: no cover - requires th
         _log.exception("attractor reconcile hook failed")
 
 
-def reconcile_setup(_subparser: object) -> None:  # pragma: no cover - requires the live hermes runtime
+def reconcile_setup(_subparser: object) -> None:
     """Configure the ``attractor-reconcile`` CLI subparser (no arguments needed).
 
     Args:
@@ -159,7 +160,7 @@ def reconcile_setup(_subparser: object) -> None:  # pragma: no cover - requires 
     """
 
 
-def reconcile_cli_handler(_args: object) -> None:  # pragma: no cover - requires the live hermes runtime
+def reconcile_cli_handler(_args: object) -> None:
     """``attractor-reconcile`` CLI handler: run a one-shot reconcile pass.
 
     Args:

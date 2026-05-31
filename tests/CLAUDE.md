@@ -83,22 +83,24 @@ just test-quick               # no coverage
 just test-hermes              # live hermes-agent integration suite (see below)
 ```
 
-### Live hermes-agent integration suite (opt-in)
+### Live hermes-agent integration suite
 
-`hermes-agent` is **not** in locked deps, so the hermes-coupled integration tests
-(`test_hermes_runtime_contract.py`, `test_reconcile_runtime.py`) `pytest.importorskip` and
-**skip** under the default `uv run pytest` (which still enforces 100% coverage on everything
-else). Run them against the real package with:
+`hermes-agent` (pinned `>=0.15.2`) is in the **`test` dependency-group**, so the hermes-coupled
+integration tests (`test_hermes_runtime_contract.py`, `test_reconcile_runtime.py`) **run as part
+of the default `uv run pytest`** and contribute to the 100% coverage gate (they cover the
+`reconcile_hook` / `attractor-reconcile` CLI / `_runtime_*` seams against the real backend). Run
+just the integration subset with:
 
 ```bash
-just test-hermes   # ≡ uv run --with hermes-agent==0.15.2 pytest tests/integration -v -m integration
+just test-hermes   # ≡ uv run pytest tests/integration -v -m integration
 ```
 
 These are **hermetic and repeatable**: `tests/integration/conftest.py` isolates each test to a
-fresh `tmp_path` `HERMES_HOME` + kanban DB (no `hermes setup`, no model key). `conftest.py`
-fixtures import `hermes_cli` / `tools` lazily so the file still imports cleanly without the
-package. New hermes-coupled test files must be added to the `[tool.pyright]` `exclude` list
-(pyright runs in the locked, hermes-free env and cannot resolve those imports).
+fresh `tmp_path` `HERMES_HOME` + kanban DB (no `hermes setup`, no model key). The
+`pytest.importorskip` guards remain as a graceful fallback if the `test` group is ever absent,
+but in the normal env the tests run. `conftest.py` fixtures import `hermes_cli` / `tools` lazily
+(via `importlib`). The hermes-coupled test files stay in the `[tool.pyright]` `exclude` list:
+`hermes-agent` ships no type stubs, so pyright (strict) would flag its untyped surface.
 
 ## Applicable skills
 

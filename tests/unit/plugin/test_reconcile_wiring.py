@@ -7,14 +7,14 @@ the env-based default-construction branches (empty run-state store → reconcile
 from __future__ import annotations
 
 import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 from unittest.mock import MagicMock
 
 import pytest
 
 from hermes_attractor.domain.pipeline import Context
 from hermes_attractor.domain.run import NodeRunStatus, Run, RunNode, RunStatus
-from hermes_attractor.plugin.reconcile import run_reconcile
+from hermes_attractor.plugin.reconcile import reconcile_hook, reconcile_setup, run_reconcile
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -114,3 +114,26 @@ def test_run_reconcile_builds_env_defaults_and_noops_on_empty_store(
     run_reconcile(tool_client=MagicMock(), event_reader=reader)
 
     reader.read_terminal_events.assert_not_called()
+
+
+def _raise_runtime_error() -> NoReturn:
+    """Stand-in for a runtime-client builder that fails (e.g. registry unavailable).
+
+    Raises:
+        RuntimeError: Always.
+    """
+    msg = "runtime unavailable"
+    raise RuntimeError(msg)
+
+
+def test_reconcile_hook_swallows_runtime_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """reconcile_hook must never raise — a build/reconcile failure is logged and swallowed."""
+    monkeypatch.setattr("hermes_attractor.plugin.reconcile._runtime_tool_client", _raise_runtime_error)
+
+    # Must not propagate the RuntimeError (on_session_start must survive a reconcile failure).
+    assert reconcile_hook(task_id="t-1") is None
+
+
+def test_reconcile_setup_is_a_noop() -> None:
+    """reconcile_setup accepts the CLI subparser and does nothing (the command takes no args)."""
+    assert reconcile_setup(object()) is None
