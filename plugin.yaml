@@ -1,0 +1,36 @@
+# Hermes plugin manifest for `attractor` — read by `hermes plugins install` (git path).
+#
+# The git installer clones this repo, reads THIS root manifest (its `name` becomes the
+# install dir ~/.hermes/plugins/attractor/), moves the whole tree there, and the directory
+# loader imports the sibling root `__init__.py` (a thin shim over src/) and calls
+# register(ctx). The git installer installs NO dependencies, so the hermes env must already
+# provide `pydot` for the graph tools to run (authoring/run/validate/summary); the plugin
+# loads regardless and degrades gracefully when pydot is absent.
+#
+# The pip entry-point path ignores this file — it loads `hermes_attractor.plugin` directly
+# via the `hermes_agent.plugins` entry point (see pyproject.toml), and pip resolves pydot.
+name: attractor
+version: 0.1.0
+description: >
+  A Hermes Agent plugin that provides LLM-driven authoring and execution of
+  attractor pipelines, built on a hexagonal core.
+author: eykd
+kind: standalone
+provides_tools:
+  - health
+  - echo
+  - attractor_create_graph
+  - attractor_add_node
+  - attractor_remove_node
+  - attractor_add_edge
+  - attractor_remove_edge
+  - attractor_set_stylesheet
+  - attractor_validate
+  - attractor_summary
+  - attractor_run
+  - attractor_status
+  - attractor_result
+provides_hooks:
+  - post_tool_call
+  - on_session_start
+requires_env: []

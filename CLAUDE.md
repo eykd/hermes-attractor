@@ -23,17 +23,22 @@ Hexagonal (ports & adapters). Dependencies point inward: `domain ← use_cases`,
 `use_cases → ports`, `adapters → ports`, and only `plugin/` knows about Hermes.
 
 ```
+plugin.yaml          # Root manifest read by `hermes plugins install` (git path)
+__init__.py          # Root shim: add src/ to sys.path, re-export register (git path only)
 src/hermes_attractor/
 ├── domain/      # Entities, value objects, exceptions. ZERO external deps. Pure rules.
 ├── ports/       # Protocols / interfaces (coverage-omitted). Contracts for the outside.
 ├── adapters/    # Concrete implementations of ports (system clock, I/O, clients).
 ├── use_cases/   # Application orchestration over domain + ports.
 └── plugin/      # Hermes entry shim — the ONLY Hermes-coupled layer.
-    ├── plugin.yaml   # Manifest (name/version/description/provides_tools/requires_env)
-    ├── __init__.py   # register(ctx): wires schemas -> handlers
+    ├── __init__.py   # register(ctx): wires schemas/handlers + hooks + CLI command
     ├── schemas.py    # LLM-facing tool JSON schemas
-    └── tools.py      # Handlers: call use_cases, return a JSON string, NEVER raise
+    ├── tools.py      # Handlers: call use_cases, return a JSON string, NEVER raise
+    └── reconcile.py  # on_session_start / post_tool_call hooks + attractor-reconcile CLI
 ```
+
+The two **root** files (`plugin.yaml`, `__init__.py`) exist only for the `hermes plugins install`
+(git/directory) load path; the pip entry-point path uses neither.
 
 **The `plugin/tools.py` contract**: every handler takes parsed tool input, **always
 returns a JSON string, and never raises** (it catches `Exception` and returns an error

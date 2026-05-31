@@ -11,6 +11,8 @@ deps do not include hermes-agent).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 hermes_plugins = pytest.importorskip("hermes_cli.plugins")
@@ -89,3 +91,22 @@ def test_register_wires_reconcile_hook_and_cli_in_real_context() -> None:
     command = manager._cli_commands["attractor-reconcile"]  # noqa: SLF001
     assert callable(command["setup_fn"])
     assert callable(command["handler_fn"])
+
+
+def test_directory_install_path_parses_manifest_and_resolves_register() -> None:
+    """Mirror ``hermes plugins install``: parse the root plugin.yaml + resolve the shim's register.
+
+    Hermes clones the repo, reads the root plugin.yaml, moves the tree to
+    ``~/.hermes/plugins/<name>/``, loads the root ``__init__.py``, and ``getattr(register)``.
+    This exercises that exact path (manifest parse + directory load) against real hermes.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    manager = PluginManager()
+
+    manifest = manager._parse_manifest(repo_root / "plugin.yaml", repo_root, "user", "")  # noqa: SLF001
+    assert manifest is not None, "hermes failed to parse the root plugin.yaml"
+    assert manifest.name == "attractor"
+    assert manifest.kind == "standalone"
+
+    module = manager._load_directory_module(manifest)  # noqa: SLF001  # imports the root __init__.py shim
+    assert callable(getattr(module, "register", None)), "root shim must expose register() to the loader"
