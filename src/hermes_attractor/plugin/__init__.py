@@ -54,9 +54,10 @@ def _runtime(handler: Callable[[dict[str, object]], str]) -> ToolHandler:
 def register(ctx: PluginContext) -> None:
     """Register all attractor plugin tools, hooks, and CLI commands with the Hermes host.
 
-    Registers 13 tools (health, echo, and the 11 attractor authoring/execution tools),
-    the ``post_tool_call`` (live advance) and ``on_session_start`` (recovery) reconcile
-    hooks, and the ``attractor-reconcile`` CLI command (zym.29 Part B).
+    Registers 14 tools (health, echo, the 11 attractor authoring/execution tools, and
+    attractor_provision_profiles), the ``post_tool_call`` (live advance) and
+    ``on_session_start`` (recovery) reconcile hooks, and the ``attractor-reconcile`` CLI
+    command (zym.29 Part B).
     """
     # -- Utility tools -------------------------------------------------------
     ctx.register_tool(
@@ -140,6 +141,12 @@ def register(ctx: PluginContext) -> None:
         _TOOLSET,
         schemas.ATTRACTOR_RESULT_SCHEMA,
         _runtime(tools.handle_attractor_result),
+    )
+    ctx.register_tool(
+        "attractor_provision_profiles",
+        _TOOLSET,
+        schemas.ATTRACTOR_PROVISION_PROFILES_SCHEMA,
+        _runtime(tools.handle_attractor_provision_profiles),
     )
 
     # -- Part B: reconcile hooks + CLI command -------------------------------

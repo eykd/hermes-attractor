@@ -38,6 +38,7 @@ _EXPECTED_TOOL_NAMES = frozenset(
         "attractor_run",
         "attractor_status",
         "attractor_result",
+        "attractor_provision_profiles",
     }
 )
 
@@ -67,7 +68,7 @@ def _make_context() -> tuple[PluginContext, PluginManager]:
 
 
 def test_register_wires_all_tools_in_real_context() -> None:
-    """All 13 attractor tools must be accepted by the real Hermes PluginContext."""
+    """All 14 attractor tools must be accepted by the real Hermes PluginContext."""
     ctx, manager = _make_context()
     register(ctx)
 

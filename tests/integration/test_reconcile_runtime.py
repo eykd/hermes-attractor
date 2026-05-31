@@ -36,7 +36,7 @@ from hermes_attractor.domain.pipeline import NodeShape
 from hermes_attractor.domain.run import NodeRunStatus, RunStatus
 from hermes_attractor.plugin import reconcile
 from hermes_attractor.plugin.reconcile import run_reconcile
-from hermes_attractor.plugin.tools import handle_attractor_run
+from hermes_attractor.plugin.tools import handle_attractor_provision_profiles, handle_attractor_run
 from hermes_attractor.use_cases.authoring import add_edge, add_node, create_graph
 from hermes_attractor.use_cases.run_execution import launch_run
 
@@ -341,3 +341,37 @@ def test_attractor_run_rejects_unknown_profile_end_to_end(
 
     assert payload["ok"] is False
     assert payload["error"] == "PipelineValidationError"
+
+
+def test_provision_profiles_for_sp_workflow_creates_all_named_profiles(
+    hermes_home: Path,  # fixture sets up isolated env
+) -> None:
+    """attractor_provision_profiles creates every profile the sp-workflow reference pipeline names.
+
+    This is the operator/agent fix for the unknown-profile case: provisioning the missing
+    profiles (cloning the active profile) makes the pipeline pass FR-004 and run.
+    """
+    serializer = PydotSerializer()
+    repo_base = Path(os.environ["ATTRACTOR_REPO_BASE"])
+    sp_dot = (Path(__file__).resolve().parents[2] / "specs" / "pipelines" / "sp-workflow.dot").read_text()
+    (repo_base / "sp-workflow.dot").write_text(sp_dot)
+    expected = set(serializer.parse(sp_dot).resolved_worker_profiles().values())
+    assert expected, "sp-workflow.dot should name worker profiles"
+
+    # First run: none of the sp-workflow profiles exist (the fixture only created `coder`).
+    payload = json.loads(handle_attractor_provision_profiles({"spec_id": "sp-workflow"}))
+    assert payload["ok"] is True, payload
+    result = payload["result"]
+    assert set(result["created"]) == expected
+    assert result["existing"] == []
+
+    # Every named profile now exists on the host, so the pipeline would pass FR-004.
+    registry = HermesProfileRegistry()
+    for name in expected:
+        assert registry.exists(name), f"profile {name!r} should have been provisioned"
+
+    # Idempotent: a second run (with an explicit base_profile) creates nothing.
+    payload2 = json.loads(handle_attractor_provision_profiles({"spec_id": "sp-workflow", "base_profile": "coder"}))
+    result2 = payload2["result"]
+    assert result2["created"] == []
+    assert set(result2["existing"]) == expected

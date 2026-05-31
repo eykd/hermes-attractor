@@ -29,6 +29,7 @@ _ALL_TOOL_NAMES = frozenset(
         "attractor_run",
         "attractor_status",
         "attractor_result",
+        "attractor_provision_profiles",
     }
 )
 
@@ -81,8 +82,8 @@ class _FakeContext:
         }
 
 
-def test_register_wires_all_thirteen_tools() -> None:
-    """Register all 13 attractor tools, each with correct toolset and schema."""
+def test_register_wires_all_tools() -> None:
+    """Register all 14 attractor tools, each with correct toolset and schema."""
     ctx = _FakeContext()
     register(ctx)
 
