@@ -344,7 +344,30 @@ def test_attractor_provision_profiles_handler_creates_missing_and_reports() -> N
     assert result["spec_id"] == "spec-a"
     assert result["created"] == ["coder"]
     assert result["existing"] == []
-    provisioner.create.assert_called_once_with("coder")
+    provisioner.create.assert_called_once_with("coder", model=None)
+
+
+def test_attractor_provision_profiles_handler_applies_tier_models() -> None:
+    """A models map sets the tier's model on a tiered profile via the handler."""
+    pipeline = _make_pipeline(node_profile="coder-high")
+    serializer = MagicMock()
+    serializer.parse.return_value = pipeline
+    store = MagicMock()
+    store.load.return_value = "digraph spec-a {}"
+    registry = MagicMock()
+    registry.exists.return_value = False
+    provisioner = MagicMock()
+
+    raw = handle_attractor_provision_profiles(
+        {"spec_id": "spec-a", "models": {"high": "prov/strong", "medium": "prov/mid"}},
+        store=store,
+        serializer=serializer,
+        registry=registry,
+        provisioner=provisioner,
+    )
+
+    assert json.loads(raw)["ok"] is True
+    provisioner.create.assert_called_once_with("coder-high", model="prov/strong")
 
 
 def test_handle_attractor_set_stylesheet_ok(tmp_path: Path) -> None:

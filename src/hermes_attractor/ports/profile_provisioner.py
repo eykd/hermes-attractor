@@ -16,14 +16,16 @@ from typing import Protocol
 class ProfileProvisioner(Protocol):  # pragma: no cover
     """Minimal interface for creating a Hermes profile on the host."""
 
-    def create(self, name: str) -> None:
+    def create(self, name: str, *, model: str | None = None) -> None:
         """Create a new profile named ``name`` on the host.
 
-        The implementation is responsible for giving the new profile a usable model
-        configuration (e.g. by cloning an existing profile). Only called for names that
-        do not already exist.
+        The implementation gives the new profile a usable base configuration (e.g. by cloning
+        an existing profile). When ``model`` is provided it overrides the new profile's
+        ``model.default``; otherwise the cloned base profile's model is kept. Only called for
+        names that do not already exist.
 
         Args:
             name: The profile name to create.
+            model: Optional model identifier to set as the profile's ``model.default``.
         """
         ...

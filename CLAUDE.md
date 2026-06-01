@@ -130,8 +130,12 @@ no model key). `just test-hermes` runs just the integration subset.
   `HERMES_HOME/profiles/<name>/`). The escape hatch is the `attractor_provision_profiles` tool —
   it creates a pipeline's missing profiles (`use_cases/provisioning.py` over
   `adapters/profile_provisioner.py::HermesProfileProvisioner` → `create_profile(clone_config=True)`),
-  cloning the active profile so each new profile gets a working model. Differentiate models afterward
-  by editing each `HERMES_HOME/profiles/<name>/config.yaml` `model.default`.
+  cloning the active profile so each new profile gets a working base config (model + `SOUL.md`
+  persona + skills). Profiles use a **role+tier** naming convention (`coder-high`, `analyst-medium`,
+  `orchestrator-low`); pass a `models={"high": …, "medium": …, "low": …}` map to set each tiered
+  profile's `model.default` per tier (`tier_for_profile` reads the suffix). The role keeps a
+  distinct profile so its `SOUL.md`/skills can be customized; the tier drives the model. The
+  reference `specs/pipelines/sp-workflow.dot` uses these tier-named profiles.
 - All `hermes_cli` / `tools.registry` imports are **lazy** (inside functions, via `importlib`),
   so production modules import cleanly without the package as a runtime dep and pyright (run in
   the locked env) does not statically resolve them. The runtime entry points (`post_tool_call_hook`,

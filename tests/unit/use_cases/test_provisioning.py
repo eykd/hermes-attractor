@@ -4,9 +4,26 @@ from __future__ import annotations
 
 import pytest
 
-from hermes_attractor.use_cases.provisioning import provision_profiles
+from hermes_attractor.use_cases.provisioning import provision_profiles, tier_for_profile
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("plan-high", "high"),
+        ("analyst-medium", "medium"),
+        ("orchestrator-low", "low"),
+        ("coder", None),
+        ("human", None),
+        ("constitution-loader", None),
+        ("high", None),  # bare tier without the "-" suffix is not a tier
+    ],
+)
+def test_tier_for_profile(name: str, expected: str | None) -> None:
+    """tier_for_profile reads the -high/-medium/-low suffix; everything else is None."""
+    assert tier_for_profile(name) == expected
 
 
 class _FakeRegistry:
@@ -29,10 +46,12 @@ class _FakeProvisioner:
         """Initialise with an empty creation log."""
         super().__init__()
         self.created: list[str] = []
+        self.models: dict[str, str | None] = {}
 
-    def create(self, name: str) -> None:
-        """Record a creation request."""
+    def create(self, name: str, *, model: str | None = None) -> None:
+        """Record a creation request and the model it was created with."""
         self.created.append(name)
+        self.models[name] = model
 
 
 def test_provision_creates_only_missing_profiles() -> None:
@@ -74,3 +93,49 @@ def test_provision_all_existing_creates_nothing() -> None:
 
     assert provisioner.created == []
     assert report == {"created": [], "existing": ["a", "b"]}
+
+
+def test_provision_sets_tier_model_from_models_map() -> None:
+    """With a models map, tiered profiles get their tier's model; non-tiered profiles get None."""
+    registry = _FakeRegistry(present=set())
+    provisioner = _FakeProvisioner()
+    models = {"high": "prov/strong", "medium": "prov/mid", "low": "prov/cheap"}
+
+    _ = provision_profiles(
+        profiles=["plan-high", "analyst-medium", "orchestrator-low", "human"],
+        registry=registry,
+        provisioner=provisioner,
+        models=models,
+    )
+
+    assert provisioner.models == {
+        "plan-high": "prov/strong",
+        "analyst-medium": "prov/mid",
+        "orchestrator-low": "prov/cheap",
+        "human": None,  # no tier suffix -> keeps the cloned base model
+    }
+
+
+def test_provision_tier_without_models_map_leaves_model_unset() -> None:
+    """Without a models map, even tiered profiles are created with model=None (clone base)."""
+    registry = _FakeRegistry(present=set())
+    provisioner = _FakeProvisioner()
+
+    _ = provision_profiles(profiles=["plan-high"], registry=registry, provisioner=provisioner)
+
+    assert provisioner.models == {"plan-high": None}
+
+
+def test_provision_tier_missing_from_models_map_leaves_model_unset() -> None:
+    """A tiered profile whose tier is absent from the models map gets model=None."""
+    registry = _FakeRegistry(present=set())
+    provisioner = _FakeProvisioner()
+
+    _ = provision_profiles(
+        profiles=["plan-high"],
+        registry=registry,
+        provisioner=provisioner,
+        models={"medium": "prov/mid"},  # no "high" entry
+    )
+
+    assert provisioner.models == {"plan-high": None}

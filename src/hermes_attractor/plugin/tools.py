@@ -444,11 +444,12 @@ def handle_attractor_provision_profiles(
 ) -> str:
     """Handle the ``attractor_provision_profiles`` tool: create a pipeline's missing profiles.
 
-    Expected inputs: spec_id (str), optional repo_path (str), optional base_profile (str).
-    Result: {spec_id, created: [str], existing: [str]}.
+    Expected inputs: spec_id (str), optional repo_path (str), optional base_profile (str),
+    optional models ({tier: model} map). Result: {spec_id, created: [str], existing: [str]}.
 
     Args:
-        args: Tool input dict containing ``spec_id`` and optionally ``repo_path`` / ``base_profile``.
+        args: Tool input dict containing ``spec_id`` and optionally ``repo_path`` /
+            ``base_profile`` / ``models``.
         store: Optional PipelineStore override (for testing).
         serializer: Optional DotSerializer override (for testing).
         registry: Optional ProfileRegistry override (for testing).
@@ -468,10 +469,18 @@ def handle_attractor_provision_profiles(
             base_raw = args.get("base_profile")
             _provisioner = HermesProfileProvisioner(clone_from=str(base_raw) if base_raw else None)
 
+        raw_models = args.get("models")
+        models = (
+            {str(k): str(v) for k, v in cast("dict[str, object]", raw_models).items()}
+            if isinstance(raw_models, dict)
+            else None
+        )
+
         report = provision_profiles(
             profiles=pipeline.resolved_worker_profiles().values(),
             registry=_registry,
             provisioner=_provisioner,
+            models=models,
         )
         return {"spec_id": spec_id, **report}
 
