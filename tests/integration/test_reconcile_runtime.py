@@ -375,3 +375,29 @@ def test_provision_profiles_for_sp_workflow_creates_all_named_profiles(
     result2 = payload2["result"]
     assert result2["created"] == []
     assert set(result2["existing"]) == expected
+
+
+def test_provision_with_models_sets_tier_model_default(
+    hermes_home: Path,  # fixture sets up isolated env
+) -> None:
+    """A {tier: model} map sets model.default on tiered profiles; non-tiered ones are left alone."""
+    yaml = importlib.import_module("yaml")
+    repo_base = Path(os.environ["ATTRACTOR_REPO_BASE"])
+    home = Path(os.environ["HERMES_HOME"])
+    sp_dot = (Path(__file__).resolve().parents[2] / "specs" / "pipelines" / "sp-workflow.dot").read_text()
+    (repo_base / "sp-workflow.dot").write_text(sp_dot)
+    models = {"high": "prov/strong", "medium": "prov/mid", "low": "prov/cheap"}
+
+    payload = json.loads(handle_attractor_provision_profiles({"spec_id": "sp-workflow", "models": models}))
+    assert payload["ok"] is True, payload
+
+    def _model_default(profile: str) -> str:
+        cfg = yaml.safe_load((home / "profiles" / profile / "config.yaml").read_text())
+        return str(cfg["model"]["default"])
+
+    assert _model_default("plan-high") == "prov/strong"
+    assert _model_default("coder-high") == "prov/strong"
+    assert _model_default("analyst-medium") == "prov/mid"
+    assert _model_default("orchestrator-low") == "prov/cheap"
+    # `human` carries no tier, so we don't force a model.default onto it.
+    assert (home / "profiles" / "human").is_dir()

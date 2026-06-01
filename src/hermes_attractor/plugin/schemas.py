@@ -368,6 +368,16 @@ ATTRACTOR_PROVISION_PROFILES_SCHEMA: dict[str, object] = {
                     "(model, env, skills). Defaults to the active profile."
                 ),
             },
+            "models": {
+                "type": "object",
+                "description": (
+                    'Optional model per tier, e.g. {"high": "anthropic/claude-opus-4", '
+                    '"medium": "...", "low": "..."}. A new profile whose name ends in '
+                    "-high/-medium/-low gets that tier's model as its model.default; others "
+                    "keep the cloned base model."
+                ),
+                "additionalProperties": {"type": "string"},
+            },
         },
         "required": ["spec_id"],
         "additionalProperties": False,
