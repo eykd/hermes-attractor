@@ -208,7 +208,6 @@ def test_from_env_uses_attractor_repo_base_env_var(tmp_path: Path) -> None:
             os.environ["ATTRACTOR_REPO_BASE"] = old_env
 
 
-
 def test_from_env_uses_hermes_env_file_repo_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """GitPipelineStore.from_env falls back to ATTRACTOR_REPO_BASE from $HERMES_HOME/.env."""
     hermes_home = tmp_path / "hermes-home"
