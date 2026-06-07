@@ -21,6 +21,9 @@ from hermes_attractor.domain.pipeline import (
 )
 from hermes_attractor.domain.run import NodeRunStatus, Run, RunNode, RunStatus
 from hermes_attractor.plugin.tools import (
+    _make_run_state_store as _make_tool_run_state_store,  # pyright: ignore[reportPrivateUsage]
+)
+from hermes_attractor.plugin.tools import (
     handle_attractor_add_edge,
     handle_attractor_add_node,
     handle_attractor_create_graph,
@@ -518,3 +521,38 @@ def test_handle_attractor_status_defaults_db_path_to_cwd() -> None:
             _ = os.environ.pop("ATTRACTOR_DB_PATH", None)
         else:
             os.environ["ATTRACTOR_DB_PATH"] = old_env
+
+
+def test_make_tool_run_state_store_prefers_explicit_db_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The tool run-state store uses ATTRACTOR_DB_PATH when it is configured."""
+    db_path = tmp_path / "explicit-runs.db"
+    monkeypatch.setenv("ATTRACTOR_DB_PATH", str(db_path))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-home"))
+
+    store = _make_tool_run_state_store()
+
+    assert store.db_path == db_path
+
+
+def test_make_tool_run_state_store_uses_hermes_home_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The tool run-state store falls back to $HERMES_HOME/attractor_runs.db."""
+    monkeypatch.delenv("ATTRACTOR_DB_PATH", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    store = _make_tool_run_state_store()
+
+    assert store.db_path == tmp_path / "attractor_runs.db"
+
+
+def test_make_tool_run_state_store_uses_cwd_outside_hermes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The tool run-state store falls back to cwd outside a Hermes runtime."""
+    monkeypatch.delenv("ATTRACTOR_DB_PATH", raising=False)
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    store = _make_tool_run_state_store()
+
+    assert store.db_path == tmp_path / "attractor_runs.db"
