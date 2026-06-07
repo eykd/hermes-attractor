@@ -67,7 +67,7 @@ _ADVANCE_ON_TOOL = "kanban_complete"
 
 
 def _make_run_state_store() -> SqliteRunStateStore:
-    """Construct a SqliteRunStateStore from ``ATTRACTOR_DB_PATH`` (or default cwd).
+    """Construct a SqliteRunStateStore from ``ATTRACTOR_DB_PATH`` or Hermes home.
 
     Mirrors ``plugin.tools._make_run_state_store`` so the hook/CLI path uses the same
     run-state database the execution tools write to.
@@ -76,7 +76,13 @@ def _make_run_state_store() -> SqliteRunStateStore:
         A SqliteRunStateStore backed by the configured database path.
     """
     env_db = os.environ.get("ATTRACTOR_DB_PATH")
-    db_path = Path(env_db) if env_db else Path.cwd() / "attractor_runs.db"
+    hermes_home = os.environ.get("HERMES_HOME")
+    if env_db:
+        db_path = Path(env_db)
+    elif hermes_home:
+        db_path = Path(hermes_home) / "attractor_runs.db"
+    else:
+        db_path = Path.cwd() / "attractor_runs.db"
     return SqliteRunStateStore(db_path=db_path)
 
 

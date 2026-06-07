@@ -13,6 +13,7 @@ import pytest
 
 from hermes_attractor.adapters.pipeline_store import (
     GitPipelineStore,
+    _env_file_value,  # pyright: ignore[reportPrivateUsage]
     _validate_spec_id,  # pyright: ignore[reportPrivateUsage]
 )
 from hermes_attractor.domain.exceptions import PipelineValidationError, RepoPathConfinementError
@@ -125,14 +126,18 @@ def test_git_pipeline_store_raises_on_load_missing_file(tmp_path: Path) -> None:
         _ = store.load("another_nonexistent")
 
 
-def test_from_env_returns_cwd_store_when_no_repo_path() -> None:
+def test_from_env_returns_cwd_store_when_no_repo_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """GitPipelineStore.from_env with no repo_path returns a store rooted at the base."""
+    monkeypatch.delenv("ATTRACTOR_REPO_BASE", raising=False)
+    monkeypatch.delenv("HERMES_HOME", raising=False)
     store = GitPipelineStore.from_env(None)
     assert store.repo_root == Path.cwd()
 
 
-def test_from_env_returns_cwd_store_when_empty_repo_path() -> None:
+def test_from_env_returns_cwd_store_when_empty_repo_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """GitPipelineStore.from_env with an empty string returns a store rooted at the base."""
+    monkeypatch.delenv("ATTRACTOR_REPO_BASE", raising=False)
+    monkeypatch.delenv("HERMES_HOME", raising=False)
     store = GitPipelineStore.from_env("")
     assert store.repo_root == Path.cwd()
 
@@ -201,6 +206,105 @@ def test_from_env_uses_attractor_repo_base_env_var(tmp_path: Path) -> None:
             _ = os.environ.pop("ATTRACTOR_REPO_BASE", None)
         else:
             os.environ["ATTRACTOR_REPO_BASE"] = old_env
+
+
+def test_from_env_uses_hermes_env_file_repo_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """GitPipelineStore.from_env falls back to ATTRACTOR_REPO_BASE from $HERMES_HOME/.env."""
+    hermes_home = tmp_path / "hermes-home"
+    repo_base = tmp_path / "repo-base"
+    hermes_home.mkdir()
+    repo_base.mkdir()
+    _ = (hermes_home / ".env").write_text(
+        "# comment\nATTRACTOR_REPO_BASE='" + str(repo_base) + "'\nOTHER=value\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("ATTRACTOR_REPO_BASE", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+    store = GitPipelineStore.from_env(None)
+
+    assert store.repo_root == repo_base.resolve()
+
+
+def test_from_env_uses_env_file_repo_base_when_cwd_deleted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GitPipelineStore.from_env still resolves the repo base when cwd no longer exists."""
+    hermes_home = tmp_path / "hermes-home"
+    repo_base = tmp_path / "repo-base"
+    deleted_cwd = tmp_path / "deleted-cwd"
+    hermes_home.mkdir()
+    repo_base.mkdir()
+    deleted_cwd.mkdir()
+    _ = (hermes_home / ".env").write_text(f'ATTRACTOR_REPO_BASE="{repo_base}"\n', encoding="utf-8")
+
+    previous_cwd = Path.cwd()
+    monkeypatch.delenv("ATTRACTOR_REPO_BASE", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    os.chdir(deleted_cwd)
+    deleted_cwd.rmdir()
+    try:
+        store = GitPipelineStore.from_env(None)
+    finally:
+        os.chdir(previous_cwd)
+
+    assert store.repo_root == repo_base.resolve()
+
+
+def test_from_env_falls_back_to_home_when_cwd_deleted_and_no_base(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GitPipelineStore.from_env uses Path.home if cwd disappeared and no repo base is configured."""
+    hermes_home = tmp_path / "hermes-home"
+    deleted_cwd = tmp_path / "deleted-cwd"
+    hermes_home.mkdir()
+    deleted_cwd.mkdir()
+
+    previous_cwd = Path.cwd()
+    monkeypatch.delenv("ATTRACTOR_REPO_BASE", raising=False)
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    os.chdir(deleted_cwd)
+    deleted_cwd.rmdir()
+    try:
+        store = GitPipelineStore.from_env(None)
+    finally:
+        os.chdir(previous_cwd)
+
+    assert store.repo_root == tmp_path.resolve()
+
+
+def test_env_file_value_returns_none_for_missing_hermes_home(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_env_file_value returns None when HERMES_HOME is absent."""
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+
+    assert _env_file_value("ATTRACTOR_REPO_BASE") is None
+
+
+def test_env_file_value_returns_none_for_missing_env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_env_file_value returns None when $HERMES_HOME/.env cannot be read."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    assert _env_file_value("ATTRACTOR_REPO_BASE") is None
+
+
+def test_env_file_value_returns_none_for_empty_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_env_file_value treats an empty KEY= entry as missing."""
+    _ = (tmp_path / ".env").write_text("ATTRACTOR_REPO_BASE=\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    assert _env_file_value("ATTRACTOR_REPO_BASE") is None
+
+
+def test_env_file_value_returns_none_for_absent_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_env_file_value returns None when .env has no matching key."""
+    _ = (tmp_path / ".env").write_text("OTHER=value\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    assert _env_file_value("ATTRACTOR_REPO_BASE") is None
 
 
 def test_validate_spec_id_rejects_sibling_dir_prefix_bypass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

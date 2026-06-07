@@ -61,17 +61,24 @@ def _safe(produce: Callable[[], dict[str, object]]) -> str:
 
 
 def _make_run_state_store() -> SqliteRunStateStore:
-    """Construct a SqliteRunStateStore from the ATTRACTOR_DB_PATH env var (or default cwd).
+    """Construct a SqliteRunStateStore from ATTRACTOR_DB_PATH or a writable Hermes home default.
 
     Reads the ``ATTRACTOR_DB_PATH`` environment variable if set; otherwise defaults to
-    ``Path.cwd() / "attractor_runs.db"``.  Mirrors the ``_make_store()`` /
-    ``ATTRACTOR_REPO_BASE`` pattern.
+    ``$HERMES_HOME/attractor_runs.db`` when ``HERMES_HOME`` is set, falling back to
+    ``Path.cwd() / "attractor_runs.db"`` only outside a Hermes runtime. Gateway-launched
+    agents often have ``/`` as cwd, which is intentionally not writable by the node user.
 
     Returns:
         A SqliteRunStateStore backed by the configured database path.
     """
     env_db = os.environ.get("ATTRACTOR_DB_PATH")
-    db_path = Path(env_db) if env_db else Path.cwd() / "attractor_runs.db"
+    hermes_home = os.environ.get("HERMES_HOME")
+    if env_db:
+        db_path = Path(env_db)
+    elif hermes_home:
+        db_path = Path(hermes_home) / "attractor_runs.db"
+    else:
+        db_path = Path.cwd() / "attractor_runs.db"
     return SqliteRunStateStore(db_path=db_path)
 
 

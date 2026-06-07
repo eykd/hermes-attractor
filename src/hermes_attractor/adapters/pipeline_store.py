@@ -101,17 +101,55 @@ def _git(args: list[str], cwd: Path) -> None:
         )
 
 
+def _env_file_value(key: str) -> str | None:
+    """Return a simple KEY=value entry from ``$HERMES_HOME/.env`` when present.
+
+    The Attractor reconciler can run inside short-lived Kanban worker processes whose
+    current working directory has already been removed by cleanup. In that path, the
+    process environment may not contain newly-added variables from ``.env`` even though
+    the file is the durable Hermes configuration source. This small parser avoids taking
+    a dependency on Hermes config internals in the adapter layer.
+    """
+    hermes_home = os.environ.get("HERMES_HOME")
+    if not hermes_home:
+        return None
+    env_path = Path(hermes_home) / ".env"
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    prefix = f"{key}="
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or not line.startswith(prefix):
+            continue
+        value = line[len(prefix) :].strip()
+        double_quoted = value.startswith('"') and value.endswith('"')
+        single_quoted = value.startswith("'") and value.endswith("'")
+        if double_quoted or single_quoted:
+            value = value[1:-1]
+        return value or None
+    return None
+
+
 def _repo_base() -> Path:
     """Return the allowed base directory for repo_path confinement.
 
-    Reads the ``ATTRACTOR_REPO_BASE`` environment variable if set; otherwise
-    defaults to the current working directory.
+    Reads ``ATTRACTOR_REPO_BASE`` from the process environment first, then from
+    ``$HERMES_HOME/.env``. If neither is set, defaults to the current working
+    directory. If the cwd has been deleted by worker cleanup, falls back to the
+    user's home directory rather than raising ``FileNotFoundError``.
 
     Returns:
         The resolved base Path that all repo_path values must be relative to.
     """
-    env_base = os.environ.get("ATTRACTOR_REPO_BASE")
-    return Path(env_base).resolve() if env_base else Path.cwd()
+    env_base = os.environ.get("ATTRACTOR_REPO_BASE") or _env_file_value("ATTRACTOR_REPO_BASE")
+    if env_base:
+        return Path(env_base).resolve()
+    try:
+        return Path.cwd()
+    except FileNotFoundError:
+        return Path.home().resolve()
 
 
 class GitPipelineStore:
